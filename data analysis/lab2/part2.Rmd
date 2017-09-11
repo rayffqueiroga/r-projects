@@ -1,0 +1,500 @@
+---
+title: "AD2 2016.2 - Lab2 - parte 2"
+author: "Rayff Queiroga"
+date: "02 de dezembro de 2016"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+## Bibliotecas Utlizadas
+
+Primeiramente vamos importar as bibliotecas necessárias para esse script ser executado.
+
+``` {r eval=FALSE, echo=TRUE}
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+## Carregando e Preparando os dados
+
+Os dados estão em um arquivo em que cada linha representa uma relação entre uma aluno e uma disciplina.
+
+Para facilitar as análises iremos obter dois *data frames* representando o primeiro e segundo período, de modo que esses *data frames* terão suas colunas organizadas da seguinte forma:
+
+*matricula*, *diciplina1*, *diciplina2*, ..., *diciplinaN*, *cra*
+
+### Carregando os dados
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Recebendo os dados, transformando a matricula em fator e ordenando por matricula
+graduados = read.csv("~/graduados.csv") %>% mutate(matricula = factor(matricula)) %>% arrange(matricula)
+
+# Retiramos as linhas que tem NA na media
+graduados.clean <- graduados %>% 
+  filter(!is.na(media))
+
+```
+
+### Cálculo do CRA e organização do Data Frame
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Cálculo do CRA
+graduados.cra <- graduados.clean %>%
+  group_by(matricula) %>%
+  mutate(cra.contrib = media*creditos) %>%
+  summarise(cra = sum(cra.contrib)/sum(creditos))
+
+# Selecionando apenas a nota final como media de um aluno em uma certa disciplina
+# Renomando colunas da disciplina para um padrão mais fácil de se trabalhar
+# Trocando linhas por colunas e adicionando coluna do CRA
+graduados.model.input <- graduados.clean %>%
+  group_by(matricula, disciplina) %>%
+  filter(media == max(media))%>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>%
+  merge(graduados.cra)
+```
+
+### Selecionando dados referentes ao primeiro e segundo período
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Selecionado apenas disciplinas do primeiro período
+primeiro.periodo <- graduados.model.input %>% select(matricula, cra, Cálculo.Diferencial.e.Integral.I, Álgebra.Vetorial.e.Geometria.Analítica, Leitura.e.Produção.de.Textos, Programação.I, Introdução.à.Computação, Laboratório.de.Programação.I)
+
+primeiro.periodo <- na.omit(primeiro.periodo)
+colnames(primeiro.periodo) <- c("matricula", "cra", "Cálculo1", "Vetorial", "LPT", "P1", "IC", "LP1")
+
+head(primeiro.periodo)
+
+# Selecionado apenas disciplinas do segundo período
+segundo.periodo <- graduados.model.input %>%
+  select(matricula, cra, Cálculo.Diferencial.e.Integral.II, Matemática.Discreta, Programação.II, Teoria.dos.Grafos, Fundamentos.de.Física.Clássica, Laboratório.de.Programação.II)
+
+segundo.periodo <- na.omit(segundo.periodo)
+colnames(segundo.periodo) <- c("matricula", "cra", "Cálculo2", "Discreta", "P2", "Grafos", "Fís.Clássica", "LP2")
+
+head(segundo.periodo)
+
+# DataFrame dos dois períodos
+primeiro.segundo.periodo <- merge(primeiro.periodo, segundo.periodo)
+head(primeiro.segundo.periodo)
+
+```
+
+## Pergunta Principal
+
+*__"O desempenho dos alunos nos dois primeiros períodos consegue explicar, em algum grau, seus desempenhos no curso como um todo?"__*
+
+Passos para responder a pergunta:
+
+1. Um modelo de regressão múltipla com todas as variáveis é plausível para explicar a variação em y? Em que grau?
+
+2. Todas as variáveis são úteis para o modelo de regressão?
+
+3. Se a resposta para a pergunta anterior foi não, construa um novo modelo sem essas variáveis e o compare ao modelo com todas as variáveis (e.g. em termos de R2 e RSE).
+
+4. Analise os plots de resíduos de cada variável e veja se algum (um ou mais) deles indica não aleatoriedade dos erros.
+
+5. Que período consegue explicar melhor o desempenho final (primeiro ou segundo)?
+
+6. Use o modelo para predizer o seu próprio desempenho e compare a predição com o seu CRA atual. Comente o resultado.
+
+## Sessão 1 - Modelos de Regressão
+
+Esta sessão busca responder as seguintes perguntas:
+
+*__1. Um modelo de regressão múltipla com todas as variáveis é plausível para explicar a variação em y? Em que grau? __*
+
+*__4. Analise os plots de resíduos de cada variável e veja se algum (um ou mais) deles indica não aleatoriedade dos erros.__*
+
+*__5. Que período consegue explicar melhor o desempenho final (primeiro ou segundo)?__*
+
+Para tal, foi feita uma análise de 3 regressões lineares múltiplas: uma utilizando dados do primeiro e segundo período, outra utilizando apenas dados do primeiro período e outra utilizando apenas dados do segundo período. Perceba que nesta sessão nenhuma variável foi tratada ou retirada, isso foi feito pois o objetivo é justamente analisar o período como um todo, na próxima sessão buscaremos analisar as variáveis e melhorar os modelos se possível.
+
+Após realizar as regressões os resultados foram discutidos.
+Para cada regressão foram *plotados* os seguintes gráficos:
+
+  * [termplot](http://www.clayford.net/statistics/tag/termplot/)
+    
+    Este gráfico *plota* os termos da regressão e seus preditores, opcionalmente
+    temos também o erro padrão e resíduos parciais. A linha tracejada nesse gráfico
+    pode nos dar algumas dicas para um melhor modelo para uma certa variável,
+    por exemplo: se a linha tracejada tiver a forma de uma parábola, talvez um
+    modelo polinomial quadrático se adeque melhor à variável.
+    
+  * [Residual Vs Fitted](https://onlinecourses.science.psu.edu/stat501/node/36)
+  
+    O objetivo de utilizar esse gráfico é verificar a não existência de padrão na
+    distribuição dos erros, já que esses erros devem ser aleatórios.
+    
+  * [Normal Q-Q](http://data.library.virginia.edu/understanding-q-q-plots/)
+  
+    Esse gráfico é útil para verificarmos se os resíduos apresentam uma
+    distribuição normal.
+    
+  * [predição vs observação](http://docs.statwing.com/interpreting-residual-plots-to-improve-your-regression/)
+  
+    Esse gráfico apresenta as observações reais em um eixo e os valores
+    encontrados pelo modelo no outro eixo, assim o ideal é que a distribuição
+    dessas observações esteja concentrada em regiões próximas à reta da 
+    função identidade y = f(x) = x.
+
+### Regressão P1
+
+Regressão utilizando apenas notas do primeiro período. Esse *data frame* tem 291 observações e para a regressão foram utilizadas 6 variáveis representando as notas em disciplinas do primeiro período:
+
+  * Cálculo Diferencial e Integral I
+  * Álgebra Vetorial e Geometria Analítica
+  * Leitura e Produção de Textos
+  * Programação I
+  * Introdução à Computação
+  * Laboratório de Programação I
+  
+O y é o CRA do aluno ao final do curso.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+lm.p1 <- lm(cra ~ ., data = primeiro.periodo %>% select(- matricula))
+summary(lm.p1)
+```
+
+Assim, podemos observar que a regressão linear apresenta um p-valor bastante baixo: 2.2e^-16, e um R² ajustado consideravalmente alto: 0.5392, de modo que o modelo se mostra válido! 
+
+O p-valor nos diz qual a probabilidade de o modelo linear ter se ajustado bem aos dados por acaso, um p-valor baixo significa que há uma baixa probabilidade do "acaso" ter ocorrido e portanto nosso modelo representa bem os dados.
+
+Já o R² nos diz o quanto o modelo consegue explicar os valores observados e este valor varia entre [0, 1] quanto mais próximo de 1 melhor. No caso da regressão acima o modelo consegue explicar ~54% dos resultados de CRA final.
+
+Já em relação as variáveis: a maioria apresenta um p-valor baixíssimo, destaco: IC, Cálculo 1 e Vetorial como as que têm os menores p-valor. A única variável que apresenta um p-valor considerado alto é P1 de modo que provavelmente sua relação com o CRA não é linear ou sua relação com o CRA pode estar sendo explicada por outra variável, talvez LP1, discutiremos essa possibilidade na próxima sessão.
+
+Cada variável e sua relação com a variável CRA podem ser melhor vistas no gráfico abaixo.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Gráficos de regressão de cada variável
+par(mfrow=c(1,6))
+termplot(lm.p1, partial.resid = TRUE, smooth = panel.smooth, span.smth = 1/4)
+```
+
+Com os gráficos abaixo percebemos que em geral o erro segue uma distribuição normal com alguns dados que não seguem a distribuição na parte inferior e superior do *plot*. E não há nenhum padrão aparente no *plot* de predições Vs resíduos.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Gráficos informativos
+par(mfrow=c(2,1))                   
+plot(lm.p1, which = 1:2)
+```
+
+### Regressão P2
+
+Regressão utilizando apenas notas do segundo período. O *data frame* utilizado tem 112 observações e para a regressão foram utilizadas 6 variáveis representando as notas nas disciplinas do segundo período:
+
+  * Cálculo Diferencial e Integral II
+  * Matemática Discreta
+  * Programação II
+  * Teoria dos Grafos
+  * Fundamentos de Física Clássica
+  * Laboratório de Programação II
+  
+O y é o CRA do aluno ao final do curso.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+lm.p2 <- lm(cra ~ ., data = segundo.periodo %>% select(- matricula))
+summary(lm.p2)
+```
+
+Assim, podemos observar que a regressão linear apresenta um p-valor bastante baixo: 2.2e^-16, e um R² ajustado consideravalmente alto: 0.6435, de modo que o modelo se mostra válido! 
+
+Já em relação às variáveis apenas uma disciplinas apresenta p-valor muito baixo que é Discreta, P2 e Grafos também apresentam um p-valor baixo, assim provavelmente tem uma relação muito forte com o CRA final do aluno. Outras têm um p-valor considerado alto, como: LP2, Física Clássica e Cálculo 2 de modo que provavelmente a relação que apresentam com o CRA não é linear ou já está sendo explicada por outra variável. 
+
+Devido ao grande número de variáveis com alto p-valor, é provável que alguma variável de baixo p-valor esteja basicamente "explicando os dados sozinhas", analisaremos essa
+possibilidade mais a fundo na próxima sessão.
+
+Cada variável e sua relação com a variável CRA podem ser melhor vistas no gráfico abaixo.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Gráficos de regressão de cada variável
+par(mfrow=c(1,6))
+termplot(lm.p2, partial.resid = TRUE, smooth = panel.smooth, span.smth = 1/4)
+```
+
+Já com os gráficos abaixo percebemos que em geral o erro segue uma distribuição normal e tem bem menos *"outliers"* que a regressão utilizando o P1, isso é esperado já que o R² foi consideravelmente superior, vale a pena ainda analisar o RMSE (isso foi feito na conclusão desta sessão). E não há nenhum padrão aparente no *plot* de previsões Vs resíduos.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+# Gráficos informativos
+par(mfrow=c(2,1))                   
+plot(lm.p2, which=1:2)
+```
+
+### Regressão P1 e P2
+
+Regressão utilizando notas do primeiro e segundo períodos. O *data frame* utilizado tem 103 observações e para a regressão foram utilizadas 12 variáveis representando as notas nas disciplinas do primeiro e segundo período.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+lm.p1.p2 <- lm(cra ~ ., data = primeiro.segundo.periodo %>% select(- matricula))
+summary(lm.p1.p2)
+```
+
+Assim, podemos observar que a regressão linear apresenta um p-valor bastante baixo: 2.2e^-16, e um R² ajustado consideravalmente alto: 0.647, de modo que o modelo se mostra válido! 
+
+Já em relação às variáveis apenas uma disciplinas apresenta p-valor muito baixo que é Discreta, P2 e LPT também apresentam um p-valor baixo. As demais variáveis apresentam um p-valor considerado alto. 
+
+É notável que essa regressão foi a que apresentou até agora maior R², mas isso já é esperado já que utilizamos mais variáveis para fazer a regressão, claro nem sempre aumentar o número de variáveis representará uma melhora no modelo, neste caso a melhora em relação à regressão utilizando apenas disciplinas do segundo período foi basicamente insignificante, apesar de termos dobrarmos o número de variáveis utilizadas no modelo.
+
+Cada variável e sua relação com a variável CRA podem ser melhor vistas no gráfico abaixo.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+# Gráficos de regressão de cada variável
+par(mfrow=c(2,6))
+termplot(lm.p1.p2, partial.resid = TRUE, smooth = panel.smooth, span.smth = 1/4)
+```
+
+Já com os gráficos abaixo percebemos que em geral o erro segue uma distribuição normal e tem bem menos *"outliers"* que a regressão utilizando o P1, porém mais *outliers* que a regressão utilizando apenas P2. E não há nenhum padrão aparente no *plot* de previsões Vs resíduos.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Gráficos informativos
+par(mfrow=c(2,1))                   
+plot(lm.p1.p2, which = 1:2)
+```
+
+### Conclusão
+
+A regressão com maior R², ou seja que cujo modelo mais "explicou" os dados, foi a que utilizou as disciplinas de ambos os períodos, resultado esse nada surpreendente, pois utilizamos o dobro de variáveis que nas outras regressões.
+
+É interessante perceber também a mudança dos "p-valores" ao utilizar diferentes regressões, uma pergunta interessante é: por que a regressão que utiliza apenas disciplinas do segundo periódo tem os maiores p-valores (por variável) e ainda sim apresenta um R² bastante superior aos da regressão que utiliza disciplinas do primeiro período? Uma hipótese é devido à maior "influência" das variáveis de p-valor pequeno do
+segundo modelo (no caso Discreta) para o CRA.
+
+Além disso, perceba que a regressão que utiliza apenas o P1 têm consideravalmente mais dados do que as demais e talvez esses dados dificultem o ajuste do modelo linear no conjunto como um todo (sejam *outliers*).
+
+Vale também destacar o quão concentrados estão os erros da regressão que utiliza apenas P1 na reta da normal, apesar dos "*outliers*" a grande maioria das observações estão concentradas na reta.
+
+Por fim vamos comparar as regressões utilizando o R² e o RMSE.
+
+#### Comparando as regressões
+
+``` {r eval=TRUE, echo=TRUE}
+  
+resultado.p1 <- data.frame(pred = predict(lm.p1, primeiro.periodo %>% select(-matricula) %>% select(-cra)), obs = primeiro.periodo$cra)
+
+resultado.p2 <- data.frame(pred = predict(lm.p2, segundo.periodo %>% select(-matricula) %>% select(-cra)), obs = segundo.periodo$cra)
+
+resultado.p1.p2 <- data.frame(pred = predict(lm.p1.p2, primeiro.segundo.periodo %>% select(-matricula) %>% select(-cra)), obs = primeiro.segundo.periodo$cra)
+
+resultado.p1$modelo <- "P1"
+resultado.p2$modelo <- "P2"
+resultado.p1.p2$modelo <- "P1 + P2"
+
+comparacao <- rbind(resultado.p1, resultado.p2, resultado.p1.p2)
+
+ggplot(comparacao, aes(x = pred, y = obs)) + 
+  geom_point(alpha = 0.5, position = position_jitter(width=0.2)) + 
+  facet_grid(. ~ modelo) + 
+  geom_abline(color="red") 
+```
+
+``` {r eval=TRUE, echo=TRUE}
+round(defaultSummary(resultado.p1), digits = 3)
+
+round(defaultSummary(resultado.p2), digits = 3)
+
+round(defaultSummary(resultado.p1.p2), digits = 3)
+```
+
+Portanto, de fato a regressão que utiliza apenas o segundo período aparentemente se saiu melhor que a do P1, apresentando um RMSE menor e um R² maior. E ainda tendo um resultado similar à regressão que utiliza todas as disciplinas (P1 + P2)
+
+## Sessão 2 - Análise das variáveis
+
+*__Todas as variáveis são úteis para o modelo de regressão? Se a resposta para a pergunta anterior foi não, construa um novo modelo sem essas variáveis e o compare ao modelo com todas as variáveis (e.g. em termos de R2 e RSE).__*
+
+### Analisando histograma
+
+Verificaremos primeiro como estão distríbuidas as notas em cada disciplina, o ideal é que
+as variáveis apresentem uma distribuição aproximadamente normal.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Histograma das disciplinas
+ggplot(melt(primeiro.segundo.periodo),aes(x = value)) + 
+    facet_wrap(~variable, scales = "free_x") + 
+    geom_histogram(aes(fill=..count..))
+
+```
+
+A partir do histograma acima podemos perceber que algumas variáveis (como P2, Física Clássica, LP2) poderiam ser normalizadas para obter um melhor modelo mais representativo, isso não será feito pois não é o foco deste laboratório.
+
+### Analisando a correlação entre variáveis
+
+Para verificar quais variáveis realmente são úteis para os modelos iremos analisar a 
+correlação entre as variáveis buscando altas correlações. Se duas variáveis apresentam alta correlação talvez uma dessas variáveis possa ser retirada, porque de certo modo a outra variável "explicará" sua influência no modelo.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Correlação entre as disciplinas
+ggcorr(primeiro.segundo.periodo %>% select(-matricula), palette = "RdBu", label = TRUE, label_round = 3)
+
+# Análise completa da relação entre as disciplinas
+ggpairs(primeiro.segundo.periodo %>% select(-matricula))
+```
+
+Observando a correlação vemos que a maioria das variáveis tem uma correlação entre [0.4, 0.55], portanto utilizar um *threshold* de 0.6 para identificar altas correlações é viável, assim: 
+
+  * P1 e LP1 tem uma alta correlação e portanto utilizar só uma destas variáveis faz  sentido, utilizaremos apenas LP1, pois P1 apresenta outras correlações altas com outras variáveis.
+
+  * Podemos retirar do nosso modelo P2, pois possui uma alta correlação com Discreta e
+    Grafos.
+  
+  * IC também apresenta alta correlação com Discreta e uma correlação próxima a ser considerada alta com outras disciplinas e por isso será retirada.
+
+### Testando novos modelos
+
+Portanto, retirando as variáveis com alta correlação, obtivemos um modelo com as seguintes variáveis:
+  
+  * Cálculo 1
+  * Vetorial
+  * LPT
+  * LP1
+  * Discreta
+  * Grafos
+  * Cálculo 2
+  * Física Clássica
+  * LP2
+  
+Vamos ver como esse modelo se sai, analisaremos os modelos daqui para frente a partir do R² quadrado que mede o quanto dos dados explicamos com nosso modelo:
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+  
+df.tentativa1 <- graduados.model.input %>% select(Cálculo.Diferencial.e.Integral.I, Álgebra.Vetorial.e.Geometria.Analítica, Leitura.e.Produção.de.Textos, Laboratório.de.Programação.I, Matemática.Discreta, Teoria.dos.Grafos, Cálculo.Diferencial.e.Integral.II, Fundamentos.de.Física.Clássica, Laboratório.de.Programação.II, matricula, cra) %>%
+  na.omit()
+
+colnames(df.tentativa1) <- c("Calculo1", "Vetorial", "LPT", "LP1", "Discreta", "Grafos", "Calculo2", "Fis.Classica", "LP2", "matricula", "cra")
+  
+lm.tentativa1 <- lm(cra ~ ., data = df.tentativa1 %>% select(- matricula))
+summary(lm.tentativa1)
+```
+
+O modelo testado apresenta um R² quadrado ajustado de ~ 0.62 que podemos tentar melhorar.
+
+Após alguns testes manuais com algumas variáveis pude perceber que P2 apesar da alta correlação com outras variáveis se mostra fundamental para um maior R² no modelo, então vamos substituir LP2 por P2 no modelo anterior.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+  
+df.tentativa2 <- graduados.model.input %>% select(Cálculo.Diferencial.e.Integral.I, Álgebra.Vetorial.e.Geometria.Analítica, Leitura.e.Produção.de.Textos, Laboratório.de.Programação.I, Matemática.Discreta, Teoria.dos.Grafos, Cálculo.Diferencial.e.Integral.II, Fundamentos.de.Física.Clássica, Programação.II, matricula, cra) %>%
+  na.omit()
+
+colnames(df.tentativa2) <- c("Calculo1", "Vetorial", "LPT", "LP1", "Discreta", "Grafos", "Calculo2", "Fis.Classica", "P2", "matricula", "cra")
+  
+lm.tentativa2 <- lm(cra ~ ., data = df.tentativa2 %>% select(- matricula))
+summary(lm.tentativa2)
+```
+
+De fato o R² ajustado subiu consideravelmente sendo o maior encontrado até agora. Vamos tentar remover algumas variáveis para verificar se aumentamos ainda mais o R², removeremos Cálculo 2 e Física Clássica que apresentam o maior p-valor no modelo acima.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+  
+df.tentativa3 <- df.tentativa2 %>% select(-Calculo2) %>%select(-Fis.Classica) %>% na.omit()
+
+lm.tentativa3 <- lm(cra ~ ., data = df.tentativa3 %>% select(- matricula))
+summary(lm.tentativa3) 
+```
+
+De fato o R² subiu consideravelmente, a esse ponto mais modelos foram testados e aqui não foram apresentados pois nenhuma melhora significativa foi conseguida. Assim iremos detalhar melhor esse terceiro modelo.
+
+### Melhor modelo linear obtido
+
+Para esse modelo foram utilizadas 103 observações, e as seguintes variáveis para modelar o CRA:
+
+  * Cálculo 1
+  * Vetorial
+  * LPT
+  * LP1
+  * Discreta
+  * Grafos
+  * P2
+
+Assim foi obtido um R² ajustado de 0.66. Mais detalhes sobre esse modelo podem ser vistos nos gráficos abaixo:
+
+``` {r eval=TRUE, echo=TRUE}
+  
+resultado.tentativa3 <- data.frame(pred = predict(lm.tentativa3, df.tentativa3 %>% select(-matricula) %>% select(-cra)), obs = df.tentativa3$cra)
+
+resultado.tentativa3$modelo <- "Tentativa 3"
+
+ggplot(resultado.tentativa3, aes(x = pred, y = obs)) + 
+  geom_point(alpha = 0.5, position = position_jitter(width=0.2)) + 
+  facet_grid(. ~ modelo) + 
+  geom_abline(color="red") 
+```
+
+``` {r eval=TRUE, echo=TRUE}
+round(defaultSummary(resultado.tentativa3), digits = 3)
+```
+
+Perceba que apesar de um R² ajustado maior que o modelo P1.P2, esse novo modelo apresenta maior RMSE (o modelo P1.P2 apresentou RMSE de 0.472).
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+# Gráficos informativos
+par(mfrow=c(2,1))                   
+plot(lm.tentativa3, which = 1:2)
+```
+
+Assim como os demais modelos: não há padrão nos erros e os resíduos apresentam uma distribuição relativamente normal.
+
+## Sessão 3 - Predizendo o CRA
+
+Para tal criaremos um *data frame* contendo as minhas notas das disciplinas do primeiro e segundo período, além de um *data frame* contendo apenas as notas utilizadas no modelo "ótimo" encontrado na sessão anterior.
+
+``` {r eval=TRUE, echo=TRUE, fig.width = 12, fig.height = 10}
+
+#1109035	ALGEBRA VETORIAL E GEOMETRIA ANALÍTICA	Obrigatória	4	60	10,0	Aprovado	2014.1
+#1109103	CALCULO DIFERENCIAL E INTEGRAL I	Obrigatória	4	60	8,3	Aprovado	2014.1
+#1411174	INTRODUÇÃO A COMPUTAÇÃO	Obrigatória	4	60	9,9	Aprovado	2014.1
+#1411180	LABORATÓRIO DE PROGRAMAÇÃO I	Obrigatória	4	60	10,0	Aprovado	2014.1
+#1307151	LEITURA E PRODUCAO DE TEXTOS	Obrigatória	4	60	9,2	Aprovado	2014.1
+#1411167	PROGRAMAÇÃO I	Obrigatória	4	60	10,0	Aprovado	2014.1
+#1109053	CALCULO DIFERENCIAL E INTEGRAL II	Obrigatória	4	60	9,8	Aprovado	2014.2
+#1108089	FUNDAMENTOS DE FÍSICA CLÁSSICA	Obrigatória	4	60	9,7	Aprovado	2014.2
+#1411181	LABORATÓRIO DE PROGRAMAÇÃO II	Obrigatória	4	60	9,7	Aprovado	2014.2
+#1109113	MATEMÁTICA DISCRETA	Obrigatória	4	60	10,0	Aprovado	2014.2
+#1411168	PROGRAMAÇÃO II	Obrigatória	4	60	9,8	Aprovado	2014.2
+#1411170	TEORIA DOS GRAFOS	Obrigatória	2	30	10,0	Aprovado	2014.2
+
+notas.p1.p2 = data.frame(Cálculo1 = 8.3, Vetorial = 10, LPT = 9.2, P1 = 10, IC=9.9, LP1 =10, Cálculo2 = 9.8, Discreta = 10, P2 = 9.8, Grafos = 10, Fís.Clássica = 9.7, LP2 = 9.7)
+
+notas.tentativa3 = data.frame(Calculo1 = 8.3, Vetorial = 10, LPT = 9.2, LP1 = 10, Discreta = 10, Grafos = 10, P2 = 9.8)
+
+predict(lm.p1.p2, notas.p1.p2)
+predict(lm.tentativa3, notas.tentativa3)
+```
+
+Ambos os modelos previram um CRA de ~9.1, o que chegou mais perto foi o modelo a partir das tentativas, mas este modelo não se saiu muito melhor que o modelo que utiliza todas as disciplinas do P1 e P2. Meu CRA atual é de 9.69, de modo que a partir das notas do primeiro e segundo período utilizando um modelo linear o valor da predição apresentou um resultado razoável.
+
+Sabemos que os modelos apresentam resultados representativos, mas não são tão precisos. Isso pode se dar pelo fato de termos utilizado apenas um modelo linear, um número maior de observações também poderia auxiliar o modelo, ou talvez a falta de variáveis explicativas no modelo.

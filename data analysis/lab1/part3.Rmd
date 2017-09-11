@@ -1,0 +1,227 @@
+---
+title: "AD2 2016.2 - Lab1 - parte 3"
+author: "Rayff Queiroga"
+date: "17 de novembro de 2016"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2) 
+library(plyr)
+library(dplyr)
+```
+
+## Bibliotecas Utlizadas<a name="bibliotecas"></a>
+
+Primeiramente vamos importar as bibliotecas necessárias para esse script ser executado.
+
+``` {r eval=FALSE, echo=TRUE}
+
+library(ggplot2) 
+library(plyr)
+library(dplyr)
+
+```
+
+## Carregando dados<a name="carregando_dados"></a>
+
+Os dados estão em um arquivo em que cada linha representa uma relação entre uma aluno e uma disciplina.
+
+``` {r eval=TRUE, echo=TRUE}
+dados_alunos_ufcg = read.csv("~/alunosUFCGAnon.csv")
+
+# Apenas dados dos alunos de Ciência da Computação
+COD_CC = 14102100
+dados_alunos_cc <- subset(dados_alunos_ufcg, Cod_Curso == COD_CC, na.rm = T)
+```
+
+## Perguntas <a name="perguntas"></a>
+
+*__"Escolha e descreva 3 perguntas que na sua opinião são relevantes, não são óbvias e que você gostaria de ver respondidas a partir dos dados. Para cada uma escreva uma frase curta que documenta qual você acha que será a resposta. (O resultado desta atividade é o checkpoint 3 do problema)."__*
+
+*1) Como se apresentam os dados das disciplinas de Ciência da Computação em relação ao número de reprovações ?*
+
+É provável que maior número de reprovações estejam em disciplinas de outros departamentos, como o Departamento de Matemática ou Física, já que são disciplinas cursadas geralmente no ínicio do curso, tidas como mais difíceis e o(a) aluno(a) ainda está se adaptando à universidade. Disciplinas com menos reprovações provavelmente serão disciplinas introdutórias do Departamento de Computação.
+
+*2) Como se apresentam o número de evasões em relação aos cursos da UFCG Campus 1 ?*
+
+Acredito que cursos de Engenharia (Elétrica, Civíl, ...) e Computação terão um número considerável de evasões já que há muitas vagas para esses cursos, porém não sei se algum curso terá um número de evasões muito pequeno (talvez o curso de Medicina por ser mais concorrido) ou se todos os cursos terão números similares de evasão em relação à proporção (numEvasao/totalAlunos), espero que com a análise essas questões sejam respondidas.
+
+*3) Como se caracteriza o rendimento dos(as) alunos(as) de Computação no que se refere aos Departamentos que oferecem as disciplinas e ao período relativo ?*
+ 
+Em relação ao período relativo a medida que o(a) aluno(a) esteja mais próximo de se formar (maior período relativo), o rendimento deverá melhorar pois estes(as) alunos(as), provavelmente, estão mais decididos(as)/seguros(as) em relação ao curso e devem se dedicar mais. 
+
+No que tange aos departamentos: o Departamento de Computação deve ter notas bastantes variadas, pois oferece a grande maioria das disciplinas; Departamentos como o de Letras e Sociologia por oferecem poucas disciplinas devem manter boas notas ao longo dos períodos, e as notas dos Departamentos de Física e Matemática devem se concentrar em disciplinas do ínicio do curso (menor período relativo) e apresentar baixo rendimento devido à dificuldade dos alunos nas disciplinas ofertadas por esses departamentos.
+
+## Análise 1 <a name="analise1"></a>
+
+*__Como se apresentam os dados das disciplinas de Ciência da Computação com relação ao número de reprovações ?__*
+
+Para responder essa pergunta foram selecionadas as disciplinas do curso de Ciência de Computação com situação de reprovação (Situação == Reprovado ou Situcação == Reprovado por Falta), além disso foram consideradas apenas disciplinas obrigatórias, já que essas devem ser cursadas por todos(as) os(as) alunos(as).
+
+A partir desses dados filtrados foi contado o número de reprovações por disciplina e além disso também foi calculada a proporção do número de reprovações em relação ao número total de alunos matriculados que finalizaram a disciplina (não trancaram).
+
+Para a visualização foram escolhidos gráficos de barra, já que queremos visualizar dados de uma variável categórica (Disciplina) e comparar os dados de cada categoria.
+
+``` {r fig.width = 12, fig.height = 10}
+
+# Selecionando apenas disciplinas reprovadas
+dados_alunos_cc_reprovados <- dados_alunos_cc[(dados_alunos_cc$Situacao == "Reprovado" | dados_alunos_cc$Situacao == "Reprovado por Falta") & dados_alunos_cc$Tipo == "Obrigatória",]
+
+# Selecionando apenas disciplinas nao trancadas
+dados_alunos_cc_nao_trancados <- dados_alunos_cc[dados_alunos_cc$Situacao != "Trancado",]
+
+# Contando número de reprovados
+dados_alunos_cc_reprovados <- dados_alunos_cc_reprovados %>% group_by(Cod_Disciplina, Nome_Disciplina)
+dados_alunos_cc_reprovados <- summarise(dados_alunos_cc_reprovados, Numero_Reprovados = length(Situacao))
+
+# Contando número de alunos em cada disciplina 
+dados_alunos_cc_nao_trancados <- dados_alunos_cc_nao_trancados %>% group_by(Cod_Disciplina, Nome_Disciplina)
+dados_alunos_cc_nao_trancados <- summarise(dados_alunos_cc_nao_trancados, Numero_Alunos = length(Situacao))
+
+# Calculando porcentagem de reprovados
+dados_alunos_cc_reprovados <- merge(dados_alunos_cc_nao_trancados, dados_alunos_cc_reprovados)
+dados_alunos_cc_reprovados$Porcentagem_Reprovados <- dados_alunos_cc_reprovados$Numero_Reprovados/dados_alunos_cc_reprovados$Numero_Alunos
+
+# Gráfico: Nome Disciplina Vs Número de reprovados
+ggplot(dados_alunos_cc_reprovados, aes(reorder(factor(Nome_Disciplina), Numero_Reprovados), Numero_Reprovados)) + geom_bar(fill="#FF9999", stat = "identity", position = "dodge")  + coord_flip() + geom_text(aes(label=Numero_Reprovados), size = 4) + guides(fill = F) + ylab("Número de Reprovados") + xlab("Nome da Disciplina")
+
+# Gráfico: Nome Disciplina Vs Proporção de reprovados
+ggplot(dados_alunos_cc_reprovados, aes(reorder(factor(Nome_Disciplina), Porcentagem_Reprovados), Porcentagem_Reprovados)) + geom_bar(stat = "identity", position = "dodge", fill="#56B4E9")  + coord_flip() + geom_text(aes(label=sprintf("%0.2f %%", Porcentagem_Reprovados * 100)), size = 4) + guides(fill = F) + ylab("Proporção de Reprovados") + xlab("Nome da Disciplina")
+
+```
+
+### Conclusão
+
+A partir dos gráficos acima podemos concluir que de fato disciplinas do Departamento de Matemática apresentam um grande número de reprovações, as maiores proporções de reprovação são todas em disciplinas desse departamento. Cálculo 1 é a disciplina que mais se destaca com uma proporção de ~60% de reprovação. Física Clássica e Probabilidade também se destacam pela grande proporção de reprovações. 
+
+Em relação às disciplinas introdutórias do curso, o resultado foi bastante surpreendente. Disciplinas como Programação 1, Lab. de Programação 1, Programação 2 e Introdução a Computação possuem um  número de reprovações (em valor absoluto) consideravalmente elevado, tendo um número maior de reprovações do que disciplinas consideradas difíceis como Compiladores e ATAL. Ao analisar a proporção os resultados são um pouco diferentes, ATAL, por exemplo, reprovou ~21% dos alunos enquanto Introdução a Computação reprovou ~18.25%, porém ainda sim uma diferença bastante pequena.
+
+Além disso disciplinas mais avançadas e que tem mais pré-requisitos apresentam um baixo número de reprovações, como é o caso de Projeto 1 e 2, IRC, LIRC, Inteligência Artificial. Já as disciplinas com maior número e proporção de reprovações pertencem ao ínicio do curso (do 1º ao 3° Período).
+
+Uma possível explicação para esses resultados seria um grande número de evasões, restando cada vez menos alunos, porém alunos mais dedicados ao curso. As análises 2 e 3 talvez possam complementar o resultado apresentado acima.
+
+## Análise 2 <a name="analise2"></a>
+
+*__Como se apresentam o número evasões em relação aos cursos da UFCG Campus 1 ?__*
+
+Para esta análise o procedimento utilizado foi bem parecido ao procedimento da Análise 1.
+Porém, primeiramente devemos filtrar apenas as linhas que apresentam dados do Campus 1 e apresentam evasão. Além disso devemos atentar que para toda disciplina que o(a) aluno(a) estava pagando no primeiro período o código de evasão será igual a 1, então devemos retirar as repetições de matrícula dos dados.
+
+Feito isso podemos contar o número de evasões para cada curso (48 cursos, utilizando o código do curso para identificá-lo) e a proporção do número de evasões em relação ao número total de matriculados. 
+
+Nesta análise também serão utilizados gráficos de barra.
+
+``` {r fig.width = 14, fig.height = 6} 
+# Selecionando apenas dados com evasão
+dados_alunos_ufcg_evasao <- dados_alunos_ufcg[dados_alunos_ufcg$Cod_Evasao == 1 & dados_alunos_ufcg$Campus == 1,]
+
+# Removendo matrículas repetidas do data frame
+dados_alunos_ufcg_evasao <- dados_alunos_ufcg_evasao[!duplicated(dados_alunos_ufcg_evasao[, c("Matricula")]), ]
+
+# Contando número de evasoes e ordenando os dados
+dados_alunos_ufcg_evasao <- group_by(dados_alunos_ufcg_evasao, Cod_Curso, Campus, Nome_Curso)
+dados_alunos_ufcg_evasao <- summarise(dados_alunos_ufcg_evasao,
+                                      Numero_de_Evasoes = sum(Cod_Evasao))
+
+dados_alunos_ufcg_evasao <- dados_alunos_ufcg_evasao[order(dados_alunos_ufcg_evasao$Numero_de_Evasoes), ]
+
+# Contando número de matrículas únicas para cada curso
+dados_alunos_ufcg_matricula <- dados_alunos_ufcg[!duplicated(dados_alunos_ufcg[, c("Matricula")]), ]
+
+dados_alunos_ufcg_matricula <- group_by(dados_alunos_ufcg_matricula, Cod_Curso, Nome_Curso)
+dados_alunos_ufcg_matricula <- summarise(dados_alunos_ufcg_matricula,
+                                      Numero_de_Matriculas = length(Matricula))
+
+# Calculando proporção do número de evasões em relação ao total de matrículas
+dados_alunos_ufcg_evasao <- merge(dados_alunos_ufcg_evasao, dados_alunos_ufcg_matricula)
+dados_alunos_ufcg_evasao$Porcentagem_de_Evasoes <- dados_alunos_ufcg_evasao$Numero_de_Evasoes/dados_alunos_ufcg_evasao$Numero_de_Matriculas
+
+# Ordenando por número de evasões e por proporção de evasão
+dados_ordenados_num_evasao <- dados_alunos_ufcg_evasao[order(dados_alunos_ufcg_evasao$Numero_de_Evasoes),]
+
+dados_ordenados_prop_evasao <- dados_alunos_ufcg_evasao[order(dados_alunos_ufcg_evasao$Porcentagem_de_Evasoes),]
+
+# Gráfico: Nome do Curso Vs Número de Evasões
+ggplot(dados_ordenados_num_evasao, aes(reorder(factor(Nome_Curso), Numero_de_Evasoes), Numero_de_Evasoes)) + geom_bar(stat = "identity", position = "dodge", fill="#FF9999")  + coord_flip() + geom_text(aes(label=Numero_de_Evasoes), size = 3) + guides(fill = F) + ylab("Número de Evasões") + xlab("Nome do Curso")
+
+ggplot(dados_ordenados_prop_evasao, aes(reorder(factor(Nome_Curso), Porcentagem_de_Evasoes), Porcentagem_de_Evasoes)) + geom_bar(stat = "identity", position = "dodge", fill="#56B4E9")  + coord_flip() + ylab("Proporção de Evasão") + xlab("Nome do Curso") + geom_text(aes(label=sprintf("%0.2f %%", Porcentagem_de_Evasoes * 100)), size = 3) 
+
+```
+
+### Conclusão
+
+A partir dos dados e da análise feita acima é possível perceber que de fato os cursos de Engenharia e Computação possuem o maior número de evasões em valores absolutos, isso faz sentido pois são os cursos que possuem um maior número de vagas. Já cursos com um menor número de vagas, como Música e Letras, apresentam um menor número de evasões. Talvez um data frame com um o número de vagas de cada curso seria interessante para calcular a correlação entre número de vagas e número de evasão e assim dar "mais força" a essa análise.
+
+Já analisando a proporção do número de evasões conseguimos alguns resultados mais interessantes e surpreendentes, como por exemplo: o fato de que todos os alunos do curso de Licenciatura Indígena saíram do curso no primeiro período, provavelmente o curso foi "fechado" logo no ínicio. 
+
+Uma grande surpresa é que os cursos de engenharia não lideram o *ranking* da maior proporção de evasões, na verdade os cursos de Meteorologia, Física e Estatística é que lideram. Além disso Engenharia Elétrica é o curso com a nona maior proporção de evasão, ficando atrás de cursos de Engenharia Agrícola, De Alimentos e Materiais.
+
+O Curso de Ciência de Computação apesar de ter um grande número total de evasões, apresenta ~46% de desistência logo no primeiro período, que é um valor considerado não muito alto em comparação com outros cursos.
+
+O Curso de Medicina apresenta a menor proporção de evasão, seguido dos cursos de Música (BAC), Arquitetura e Design.
+
+Muitas variáveis podem estar "por trás" desses resultados, como por exemplo: dificuldade do curso, preocupação em relação à perspectiva financeira ou reconhecimento do curso, dificuldade de conciliar curso com outras atividades. Uma análise mais detalhada poderia ser feita buscando os motivos de evasão nos diferentes cursos.
+
+## Análise 3 <a name="analise3"></a>
+
+*__Como se caracteriza o rendimento dos(as) alunos(as) de Computação no que se refere aos Departamentos que oferecem as disciplinas e ao período relativo ? __*
+
+Para responder essa pergunta foram retiradas disciplinas Optativas dos dados, já que podem ser cursadas em basicamente qualquer período do curso, e em seguida os dados foram agrupados pela Matrícula, Período relativo e Departamento para calcular a média das notas dos alunos em cada período relativo e departamento.
+
+Dois gráficos foram utilizados para facilitar a visualização e interpretação da dispersão dados: um gráfico de dispersão das médias para cada departamento e um  [gráfico violino](https://en.wikipedia.org/wiki/Violin_plot) utilizando as mesmas variáveis.
+
+Buscando saber se há relação entre estas variáveis também foi calculada a correlação entre o Período Relativo e as Médias dos alunos, o resultado se encontra abaixo.
+
+``` {r fig.width = 10, fig.height = 6}
+
+# Apenas disciplinas obrigatórias serão analisadas
+dados_alunos_cc_filtrados <- dados_alunos_cc[!is.na(dados_alunos_cc$Media_Disciplina) & dados_alunos_cc$Tipo == "Obrigatória",]
+
+# Análise por período e Departamento
+dados_alunos_cc_periodo_dep <- aggregate(x = dados_alunos_cc_filtrados$Media_Disciplina, by=list(Matricula = dados_alunos_cc_filtrados$Matricula, Periodo_Relativo = dados_alunos_cc_filtrados$Periodo_Relativo, Departamento = dados_alunos_cc_filtrados$Departamento), FUN=mean, na.rm = T)
+
+# Análise apenas por período
+dados_alunos_cc_periodo <- aggregate(x = dados_alunos_cc_filtrados$Media_Disciplina, by=list(Matricula = dados_alunos_cc_filtrados$Matricula, Periodo_Relativo = dados_alunos_cc_filtrados$Periodo_Relativo), FUN=mean, na.rm = T)
+
+# Renomeando de x para Media_Periodo
+colnames(dados_alunos_cc_periodo_dep)[4] <- "Media_Periodo"
+colnames(dados_alunos_cc_periodo)[3] <- "Media_Periodo"
+
+# Gráficos: Periodo_Relativo VS Media_Periodo
+
+ggplot(dados_alunos_cc_periodo_dep, aes(Periodo_Relativo, Media_Periodo, colour = Departamento)) + geom_point(shape=19, alpha = 1/4, na.rm = T) + xlab("Período Relativo") + ylab("Média") + facet_grid(. ~ Departamento, scales = "free", space = "free") +
+  theme(strip.background = element_blank(), strip.text = element_blank()) +  xlim(0, 20)
+
+ggplot(dados_alunos_cc_periodo_dep, aes(Periodo_Relativo, Media_Periodo, colour = Departamento)) + geom_violin(alpha = 1/4, na.rm = T) + xlab("Período Relativo") + ylab("Distribuição da Média") + facet_grid(. ~ Departamento, scales = "free", space = "free") +
+  theme(strip.background = element_blank(), strip.text = element_blank()) +  xlim(0, 20)
+
+```
+
+### Conclusão
+
+Observando a distribuição dos dados podemos verificar que:
+
+  * Tanto o departamento de Física quanto o de Estatística apresentam em geral bom rendimento e os(as) alunos(as) cursam as disciplinas desses departamento no ínicio do curso. Ambos departamentos apresentam distribuição similar, porém as disciplinas do departamento de Estatística estão mais dispersas entre os períodos relativos.
+  
+  * Já o departamento de Letras e o departamento de Sociologia apresentam ótimos rendimentos e se concentram principalmente no ínicio do curso, porém alunos que deixam para cursar as disciplinas em períodos mais a frente ainda apresentam um bom rendimento nas disciplinas desses Departamentos. Além disso os(as) alunos(as) cursam as disciplinas de Letras majoritariamente no início, enquanto as disciplinas de Sociologia são cursadas ao longo do curso.
+  
+  * O departamento de Matemática apresenta rendimento bastante distribuído durante a maioria dos períodos relativos. Já o departamento de Computação também apresenta bastante dispersão nas notas, porém a medida que o período relativo aumenta a concentração de notas altas (maiores que 5) aumenta consideravelmente.
+  
+Em geral, aparentemente não há uma relação direta entre o período relativo do aluno e seus resultados nas disciplinas de diferentes departamentos, o único departamento em que há uma aparente melhora nas notas com o passar dos períodos é o departamento de Computação.
+  
+### Cálculo da Correlação entre Período relativo e Média do Período
+
+``` {r}
+cor(dados_alunos_cc_periodo$Periodo_Relativo, dados_alunos_cc_periodo$Media_Periodo)
+
+```
+
+A correlação é basicamente inexistente, provavelmente devido à grande dispersão dos dados ao longo dos períodos. Assim não podemos concluir se a medida que os períodos períodos passam o desempenho dos alunos tendem a melhorar ou piorar.
+

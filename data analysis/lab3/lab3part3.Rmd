@@ -1,0 +1,431 @@
+---
+title: "AD2 2016.2 - Lab3 - Parte 3"
+author: "Rayff Queiroga"
+date: "12 de março de 2017"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, set.seed(825))
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(rpart)
+library(C50)
+library(gmodels)
+library(randomForest)
+
+```
+
+# Bibliotecas Utlizadas
+
+Primeiramente vamos importar as bibliotecas necessárias para esse script ser executado.
+
+``` {r eval=FALSE, echo=TRUE}
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+library(rpart)
+library(C50)
+library(gmodels)
+library(randomForest)
+
+```
+
+# Descrição da atividade
+
+Aqui se encontram as técnicas e modelos adotados para realização das submissões do [desafio no Kaggle](https://inclass.kaggle.com/c/previsao-de-evasao-em-computacao).
+
+# 0. Antes de melhorar os modelos...
+
+## 0.1 Funções auxiliares e variáveis globais
+
+Para preparar e transformar os dados foram usadas as funções e variáveis auxiliares apresentadas nesta seção.
+
+``` {r}
+
+COL_DADOS = c("matricula", "cod_disciplina", "disciplina", "ano", "periodo", "media", "evadiu")
+
+COL_DADOS_KAGGLE = c("matricula", "cod_disciplina", "disciplina", "ano", "periodo", "media")
+
+COL_T = c("matricula", "AV", "C1", "IC", "LP1", "LPT", "P1", "evadiu", "ano", "periodo")
+
+COL_T_KAGGLE = c("matricula", "AV", "C1", "IC", "LP1", "LPT", "P1")
+
+NOTA_REP = 5
+NOTA_FINAL = 7
+
+INICIO_DISC = 2
+FIM_DISC = 7
+NUM_DISC = 6
+
+select_treino <- function(ano_periodo) {
+  return(as.integer(ano_periodo) >= 20091  & as.integer(ano_periodo) <= 20142)
+}
+
+calcula_status <- function(C1, AV, IC, LP1, LPT, P1) {
+  return (
+    (C1 < NOTA_REP) & (AV < NOTA_REP) & (IC < NOTA_REP) & (LP1 < NOTA_REP) & 
+    (LPT < NOTA_REP) & (P1 < NOTA_REP)
+  )
+}
+
+calcula_cra <- function(C1, AV, IC, LP1, LPT, P1) {
+  return((C1 + AV + IC + LP1 + LPT + P1)/NUM_DISC)
+}
+
+calcula_cra_cc <- function(IC, LP1, P1) {
+  return((IC + LP1 + P1)/3)
+}
+
+calcula_num_finais <- function(C1, AV, IC, LP1, LPT, P1) {
+  return(
+    (C1 < NOTA_FINAL) + (AV < NOTA_FINAL) + (IC < NOTA_FINAL) + (LP1 < NOTA_FINAL) + 
+    (LPT < NOTA_FINAL) + (P1 < NOTA_FINAL)
+  )
+}
+
+calcula_num_NA <- function(C1, AV, IC, LP1, LPT, P1) {
+  return( 
+    NUM_DISC - (is.finite(C1) + is.finite(AV) + is.finite(IC) + is.finite(LP1) + 
+    is.finite(LPT) + is.finite(P1))
+  )
+}
+
+decide_na <- function(col, num, media) {
+  return(ifelse(is.na(col), ifelse(num > 3, 0, media), col))
+}
+
+```
+
+## 0.2 Separando os dados de treino e teste
+
+Para fazer a separação iremos considerar os dados de [2009.1, 2014.2] como treino e [2015.1, 2015.2] como teste. Os demais anos foram retirados, pois vários não apresentaram evasões (isso foi verificado na parte 1) e portanto retirá-los pode diminuir um pouco o desbalanceamento dos dados.
+
+``` {r eval=TRUE, echo=TRUE}
+
+# recebe dados
+dados <- read.csv('~/DataAnalysis2/lab3/treino.csv')
+dados <- na.omit(dados)
+
+# renomeia colunas
+colnames(dados) <- COL_DADOS
+
+# cria coluna para auxiliar separação dos dados
+dados$ano_periodo <- paste(as.character(dados$ano), as.character(dados$periodo), sep="")
+
+# separação dos dados
+dados <- dados %>% mutate(treino=select_treino(ano_periodo))
+aux_split <- split(dados, dados$treino)
+
+teste <- aux_split[[1]]
+teste <- teste[teste$ano == 2015,] # apenas o ano de 2015 eh considerado
+
+treino <- aux_split[[2]]
+```
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Treino
+alunos.evadiu <- treino %>%
+  group_by(matricula) %>% select(matricula, evadiu, ano, periodo) %>% unique()
+
+treino <- treino %>%
+  group_by(matricula, disciplina) %>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>% merge(alunos.evadiu)
+
+colnames(treino) <- COL_T
+
+# Teste
+
+alunos.evadiu <- teste %>%
+  group_by(matricula) %>% select(matricula, evadiu, ano, periodo) %>% unique()
+
+teste <- teste %>%
+  group_by(matricula, disciplina) %>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>% merge(alunos.evadiu)
+
+colnames(teste) <- COL_T
+
+# Teste kaggle
+
+teste_k <- read.csv('~/DataAnalysis2/lab3/teste.csv')
+# renomeia colunas
+colnames(teste_k) <- COL_DADOS_KAGGLE
+
+teste_k <- teste_k %>%
+  group_by(matricula, disciplina) %>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean)
+
+colnames(teste_k) <- COL_T_KAGGLE
+
+```
+
+## 0.3 Tratando NAs
+
+``` {r}
+
+# Treino
+treino$num_NA <- 
+  calcula_num_NA(treino$C1, treino$AV, treino$IC, treino$LP1, treino$LPT, treino$P1)
+
+treino$media_NA <- 
+  rowMeans(subset(treino, select = c(C1, AV, IC, LP1, LPT, P1)), na.rm = TRUE)
+
+for (i in INICIO_DISC:FIM_DISC) {
+  treino[, i] <- decide_na(treino[, i], treino$num_NA, treino$media_NA)
+}
+
+treino <- subset(treino, select = -c(media_NA, ano, periodo))
+
+# Teste
+teste$num_NA <- calcula_num_NA(teste$C1, teste$AV, teste$IC, teste$LP1, teste$LPT, teste$P1)
+
+teste$media_NA <- rowMeans(subset(teste, select = c(C1, AV, IC, LP1, LPT, P1)), na.rm = TRUE)
+
+for (i in INICIO_DISC:FIM_DISC) {
+  teste[, i] <- decide_na(teste[, i], teste$num_NA, teste$media_NA)
+}
+
+teste <- subset(teste, select = -c(media_NA, ano, periodo))
+
+# Teste Kaggle
+teste_k$num_NA <- calcula_num_NA(teste_k$C1, teste_k$AV, teste_k$IC, teste_k$LP1, teste_k$LPT, teste_k$P1)
+
+teste_k$media_NA <- rowMeans(subset(teste_k, select = c(C1, AV, IC, LP1, LPT, P1)), na.rm = TRUE)
+
+for (i in INICIO_DISC:FIM_DISC) {
+  teste_k[, i] <- decide_na(teste_k[, i], teste_k$num_NA, teste_k$media_NA)
+}
+
+teste_k <- subset(teste_k, select = -c(media_NA))
+
+# Treino
+treino$status <- 
+  calcula_status(treino$C1, treino$AV, treino$IC, treino$LP1, treino$LPT, treino$P1)
+
+treino$cra <-
+  calcula_cra(treino$C1, treino$AV, treino$IC, treino$LP1, treino$LPT, treino$P1)
+
+treino$cra_cc <- 
+  calcula_cra_cc(treino$IC, treino$LP1, treino$P1)
+
+treino$num_finais <- 
+  calcula_num_finais(treino$C1, treino$AV, treino$IC, treino$LP1, treino$LPT, treino$P1)
+
+# Teste
+teste$status <- 
+  calcula_status(teste$C1, teste$AV, teste$IC, teste$LP1, teste$LPT, teste$P1)
+
+teste$cra <-
+  calcula_cra(teste$C1, teste$AV, teste$IC, teste$LP1, teste$LPT, teste$P1)
+
+teste$cra_cc <- 
+  calcula_cra_cc(teste$IC, teste$LP1, teste$P1)
+
+teste$num_finais <- 
+  calcula_num_finais(teste$C1, teste$AV, teste$IC, teste$LP1, teste$LPT, teste$P1)
+
+# Teste Kaggle
+teste_k$status <- 
+  calcula_status(teste_k$C1, teste_k$AV, teste_k$IC, teste_k$LP1, teste_k$LPT, teste_k$P1)
+
+teste_k$cra <-
+  calcula_cra(teste_k$C1, teste_k$AV, teste_k$IC, teste_k$LP1, teste_k$LPT, teste_k$P1)
+
+teste_k$cra_cc <- 
+  calcula_cra_cc(teste_k$IC, teste_k$LP1, teste_k$P1)
+
+teste_k$num_finais <- 
+  calcula_num_finais(teste_k$C1, teste_k$AV, teste_k$IC, teste_k$LP1, teste_k$LPT, teste_k$P1)
+
+
+
+```
+# 1. Modelo 1
+
+O primeiro modelo enviado foi o modelo que apresentou melhor recall na parte 2 desta atividade, que foi o modelo gerado utilizando rpart (árvore de decisão) e tanto atributos gerais quanto as notas em CC. Segue abaixo a lista de atributos:
+
+  * matricula: identificador do aluno
+  
+  * AV: média em Álgebra Vetorial
+
+  * C1: média em Cálculo 1
+
+  * IC: média em Introdução a Computação
+  
+  * LPT: média em Leitura e Produção de Texto
+  
+  * P1: média em Programação 1
+  
+  * evadiu: variável de classificação
+  
+  * num_NA: número de NAs
+
+  * status: TRUE se reprovou todas as disciplinas
+  
+  * cra: média das disciplinas
+  
+  * cra_cc: média nas disciplinas de cc
+  
+  * num_finais: número de finais feitas
+
+``` {r fig.width = 12, fig.height = 10}
+
+model1 <- rpart(evadiu ~ AV + C1 + LPT + P1 + IC + cra + cra_cc + num_NA + status + num_finais, data = treino, method = 'class')
+
+plot(model1)
+text(model1, pretty=0)
+
+pred1 <- predict(model1, teste, type='class')
+
+acc1 <- confusionMatrix(pred1, teste$evadiu)
+acc1
+
+acc1$byClass['Recall']
+
+```
+
+## 1.1 Previsão nos dados de teste do Kaggle
+
+```{r}
+
+pred1 <- predict(model1, teste_k, type='class')
+sol1 <- data.frame(MAT_ALU_MATRICULA = teste_k$matricula, EVADIU=(pred1 == TRUE))
+
+write.csv(sol1, file = 'sol1.csv', row.names = F)
+
+```
+
+Esse modelo obteve score de 0.84314 que pode ser considerado um bom resultado.
+
+# 2. Modelo 2:  Regressão Logística + CSL
+
+Inicialmente minha ideia era balancear os dados, mas depois de ler alguns blogs e posts decidi utilizar a técnica de Cost Sensitive Learning (CSL) em vez de balancear os dados.
+
+De forma simples CSL busca lidar com o desbalanceamento atribuindo diferentes pesos pra diferentes problemas de "misclassification". Não criamos novos dados, nem retiramos dados, apenas associamos pesos que irão enfatizar o custo da classificação feita erroneamente para casos particulares. 
+
+Não encontrei nenhum método específico para CSL no R, então uma abordagem similar é utilizar outra métrica para avaliar e gerar o modelo, assim a métrica utilizada foi Kappa (mais detalhes em [6]) que é tida como uma melhor métrica que a acurácia para dados desbalanceados.
+
+Mais detalhes sobre as decisões tomadas podem ser vistas em [1], [2], [3]. Além disso mais detalhes sobre CSL podem ser vistos em [3].
+
+``` {r fig.width = 12, fig.height = 10}
+
+ctrl <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+
+model2 <- train(as.factor(evadiu) ~ AV + C1 + LPT + P1 + IC + cra + cra_cc + num_NA + status + num_finais,
+                   data=treino,
+                   method="glm",
+                   family="binomial",
+                   na.action=na.omit,
+                   metric="Kappa",
+                   trControl=ctrl)
+
+model2
+
+pred2 <- predict(model2, teste, type='prob')
+
+acc2 <- confusionMatrix(pred2[, 2] > 0.7, teste$evadiu)
+acc2
+
+acc2$byClass['Recall']
+
+```
+
+## 2.1 Previsão nos dados de teste do Kaggle
+
+```{r}
+
+pred2 <- predict(model2, teste_k, type='prob')
+pred2 <- pred2[, 2] > 0.7
+sol2 <- data.frame(MAT_ALU_MATRICULA = teste_k$matricula, EVADIU=(pred2 == TRUE))
+
+write.csv(sol2, file = 'sol2.csv', row.names = F)
+
+```
+
+Não houve melhoria nos testes do Kaggle, apesar de: sol1.csv != sol2.csv.
+
+Esse modelo obteve score de 0.84314.
+
+# 3. Modelo 3: Random forest
+
+Para tentar melhorar os resultados, decidi utilizar Random forest que é um método bastante utilizado e popular em desafios e na literatura.
+
+Random forest irá criar vários modelos diferentes, porém simples, e unir os resultados para criar uma boa árvore de decisão, mais sobre Random forest pode ser visto em [4] e [5].
+
+O modelo abaixo utiliza os mesmos atributos dos modelos anteriores e 2000 "sub-árvores" serão geradas.
+
+``` {r fig.width = 12, fig.height = 10}
+
+model3 <- randomForest(evadiu ~ AV + C1 + LPT + P1 + IC + cra + cra_cc + num_NA + status +
+                      num_finais,
+                      data=treino, 
+                      importance=TRUE, 
+                      ntree=2000)
+
+model3
+
+pred.3 <- predict(model3, teste, type='class')
+
+acc.3 <- confusionMatrix(pred.3 > 0.7, teste$evadiu)
+acc.3
+
+acc.3$byClass['Recall']
+
+varImpPlot(model3)
+
+```
+
+Esse modelo apresentou uma acurácia levemente superior que o primeiro modelo, e recall também, então talvez possa se sair melhor nos testes do Kaggle.
+
+Sobre o gráfico acima, são dois gráficos que medem a importância das variáveis. O mais a esquerda mostra o quão pior é o modelo sem essa variável então as variáveis com maiores valores são "mais importantes". Já o gráfico a direita utiliza detalhes da matemática utilizada pelo Random Forest, mas basicamente mede o quão simples os nós são no fim da árvore.
+
+## 2.1 Previsão nos dados de teste do Kaggle
+
+```{r}
+
+pred3 <- predict(model3, teste_k, type='class')
+sol3 <- data.frame(MAT_ALU_MATRICULA = teste_k$matricula, EVADIU=(pred3 > 0.7))
+
+write.csv(sol3, file = 'sol3.csv', row.names = F)
+
+```
+
+Apesar do modelo aparentemente ser melhor, o resultado nos testes foi exatamente o mesmo.
+
+Esse modelo obteve score de 0.84314, como esperado.
+
+# Referências
+
+[1. Desbalanceamento 1](http://www.win-vector.com/blog/2015/02/does-balancing-classes-improve-classifier-performance/)
+
+[2. Desbalanceamento 2](https://www.r-bloggers.com/unbalanced-data-is-a-problem-no-balanced-data-is-worse/)
+
+[3. Desbalanceamento 3](https://www.analyticsvidhya.com/blog/2016/03/practical-guide-deal-imbalanced-classification-problems/)
+
+[4. random forest](https://en.wikipedia.org/wiki/Random_forest)
+
+[5. random forest in R](https://cran.r-project.org/web/packages/randomForest/randomForest.pdf)
+
+[6. Kappa](https://en.wikipedia.org/wiki/Cohen's_kappa)

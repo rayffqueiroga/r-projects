@@ -1,0 +1,569 @@
+---
+title: "AD2 2016.2 - Lab2 - Parte 3"
+author: "Rayff Queiroga"
+date: "18 de dezembro de 2016"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, set.seed(825))
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+# Bibliotecas Utlizadas
+
+Primeiramente vamos importar as bibliotecas necessárias para esse script ser executado.
+
+``` {r eval=FALSE, echo=TRUE}
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+# Descrição da atividade
+
+Os seguintes passos serão seguidos nesse exercício:
+
+1. Baixe os dados de treino e teste.
+
+2. Calcule o CRA dos alunos com base no script de preprocessamento (Links para um site externo) do lab anterior.
+
+3. Usando todas as variáveis disponíveis (disciplinas do primeiro e segundo período), use validação cruzada (nos dados de treino) para tunar um modelo de regressão Ridge.
+
+4. Mesmo que o item acima mas usando um modelo de regressão Lasso.
+
+5. Mesmo que o item acima mas usando um modelo de regressão Linear sem regularização.
+
+6. Re-treine o melhor modelo (dessa vez nos dados de treino sem validação cruzada) e reporte o RMSE no teste.
+
+7. Compare os modelos nos dados de teste em termos de RMSE.
+
+8. Quais as variáveis mais importantes segundo o modelo de regressão Lasso? Alguma variável foi descartada? Quais?
+
+9. Use o modelo treinado em 6 e aplique nos dados de teste que vamos disponibilizar.
+
+10. Crie novos atributos a partir dos existentes para tentar melhorar o seu modelo.
+ 
+# 1. Baixe os dados de treino e teste.
+
+Vamos baixar os dados e verificar como estes estão organizados.
+
+``` {r eval=TRUE, echo=TRUE}
+
+graduados.treino = read.csv("~/graduados_treino.csv")
+graduados.teste = read.csv("~/graduados_teste.csv")
+
+# Renomeando colunas
+nomes.colunas <- c("matricula", "ano_de_termino", "semestre", "codigo_disciplina", "disciplina", "creditos", "media")
+
+colnames(graduados.treino) <- nomes.colunas
+colnames(graduados.teste) <- nomes.colunas
+
+# Retiramos as linhas que tem NA na media
+graduados.treino.clean <- graduados.treino %>% na.omit()
+graduados.teste.clean <- graduados.teste %>% na.omit()
+
+summary(graduados.treino)
+summary(graduados.teste)
+```
+
+As colunas foram renomeadas para ter nomes mais descritivos, assim ambos os *data frames* estão organizados da seguinte forma:
+
+  * matricula: um indentificador para um certo aluno
+  * ano_de_termino: ano em que aluno se formou
+  * semestre: é um inteiro X pertencente a [1,2] que indica se o aluno se formou no ano_de_termino.X
+  * codigo_disciplina: código da disciplina
+  * disciplina: nome da disciplina
+  * creditos: número de créditos da disciplina
+  * media: média que aluno obteve na disciplina
+
+# 2. Calcule o CRA dos alunos com base no script de preprocessamento do lab anterior.
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Cálculo do CRA
+graduados.teste.cra <- graduados.teste.clean %>%
+  group_by(matricula) %>%
+  mutate(cra.contrib = media*creditos) %>%
+  summarise(cra = sum(cra.contrib)/sum(creditos))
+
+graduados.treino.cra <- graduados.treino.clean %>%
+  group_by(matricula) %>%
+  mutate(cra.contrib = media*creditos) %>%
+  summarise(cra = sum(cra.contrib)/sum(creditos))
+
+# Selecionando apenas a nota final como media de um aluno em uma certa disciplina
+# Renomando colunas da disciplina para um padrão mais fácil de se trabalhar
+# Trocando linhas por colunas e adicionando coluna do CRA
+graduados.teste.model.input <- graduados.teste.clean %>%
+  group_by(matricula, disciplina) %>%
+  filter(media == max(media))%>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>%
+  merge(graduados.teste.cra)
+
+graduados.treino.model.input <- graduados.treino.clean %>%
+  group_by(matricula, disciplina) %>%
+  filter(media == max(media))%>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>%
+  merge(graduados.treino.cra)
+```
+
+## Selecionando dados referentes ao primeiro e segundo período
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Selecionado apenas disciplinas do primeiro período
+primeiro.periodo.teste <- graduados.teste.model.input %>% select(matricula, cra, Cálculo.Diferencial.e.Integral.I, Álgebra.Vetorial.e.Geometria.Analítica, Leitura.e.Produção.de.Textos, Programação.I, Introdução.à.Computação, Laboratório.de.Programação.I)
+
+primeiro.periodo.treino <- graduados.treino.model.input %>% select(matricula, cra, Cálculo.Diferencial.e.Integral.I, Álgebra.Vetorial.e.Geometria.Analítica, Leitura.e.Produção.de.Textos, Programação.I, Introdução.à.Computação, Laboratório.de.Programação.I)
+
+colnames(primeiro.periodo.teste) <- c("matricula", "cra", "Cálculo1", "Vetorial", "LPT", "P1", "IC", "LP1")
+colnames(primeiro.periodo.treino) <- c("matricula", "cra", "Cálculo1", "Vetorial", "LPT", "P1", "IC", "LP1")
+```
+
+``` {r eval=TRUE, echo=TRUE}
+
+segundo.periodo.teste <- graduados.teste.model.input %>%
+  select(matricula, cra, Cálculo.Diferencial.e.Integral.II, Matemática.Discreta, Programação.II, Teoria.dos.Grafos, Fundamentos.de.Física.Clássica, Laboratório.de.Programação.II)
+
+segundo.periodo.treino <- graduados.treino.model.input %>%
+  select(matricula, cra, Cálculo.Diferencial.e.Integral.II, Matemática.Discreta, Programação.II, Teoria.dos.Grafos, Fundamentos.de.Física.Clássica, Laboratório.de.Programação.II)
+
+colnames(segundo.periodo.teste) <- c("matricula", "cra", "Cálculo2", "Discreta", "P2", "Grafos", "Fís.Clássica", "LP2")
+colnames(segundo.periodo.treino) <- c("matricula", "cra", "Cálculo2", "Discreta", "P2", "Grafos", "Fís.Clássica", "LP2")
+```
+
+## DataFrame com disciplinas do primeiro e segundo período
+
+``` {r eval=TRUE, echo=TRUE}
+dados.teste <- merge(primeiro.periodo.teste, segundo.periodo.teste) %>% na.omit()
+dados.treino <- merge(primeiro.periodo.treino, segundo.periodo.treino) %>% na.omit()
+```
+
+# 3. Usando todas as variáveis disponíveis (disciplinas do primeiro e segundo período), use validação cruzada (nos dados de treino) para tunar um modelo de regressão Ridge.
+
+Antes de realizar a validação cruzada, segue uma breve discussão do porquê utiliza-lá e como funciona o modelo Ridge.
+
+## Validação Cruzada
+
+Nossa preocupação não é mais modelar os dados e sim *prever* resultados. Assim apenas usar as mesmas observações, utilizadas para estimar o modelo, para validar sua acurácia não é mais suficiente. Com esse tipo de teste apenas sabemos como o modelo se comporta para os dados já estudados, mas e para novas observações?
+
+Na verdade queremos analisar nosso modelo através do erro de generalização que é a estimativa do erro sobre todos os pontos de dados possíveis, porém a obtenção de tal erro é normalmente impraticável devido ao volume de dados existentes.
+
+Assim, parar melhor avaliar a "performance preditiva" dos modelos devemos usar um outro conjunto de dados independentes (dados de teste) dos utilizados para gerar o modelo (dados de treino), de modo que o modelo passa a ser "avaliado" agora pelos dados de teste, onde o modelo com menor erro nos dados de teste é o "melhor". Essa é a ideia básica do método chamado **validação cruzada**.
+
+Existem vários métodos de validação cruzada, como por exemplo: holdout, k-fold, leave-one-out. Destacarei apenas o k-fold que será utilizado nesse exercício (mais sobre os outros métodos pode ser lido [neste link](https://w...content-available-to-author-only...u.edu/~schneide/tut5/node42.html)).
+
+Na validação cruzada k-fold ocorrerá 2 particionamentos nos dados, assim haverá dados de: treino e teste. Os dados de treino são usados para estimar o modelo, já os dados de teste não são usados de nenhuma forma para gerar o modelo, são utilizados apenas para verificação da acurácia deste.
+
+No k-fold os dados de treino são na verdade particonados em **k** conjuntos chamados de *folders*, a cada iteração um dos **k** conjuntos é escolhido como conjunto de validação e será feito o "merge" dos demais **k-1** conjuntos para serem usados como treino (e portanto são usados para gerar o modelo), ao final dessa interação é calculado o erro em relação ao bloco de validação. Ao final é calculada a média dos erros de cada interação. 
+
+A vantagem desse modelo é que não importa tanto como os dados são divididos, cada dado será usado uma única vez como validação. A desvantagem é que na medida que **k** aumenta, aumenta-se a precisão mas também aumenta-se a **complexidade** (tempo) das operações.
+
+## Modelo Ridge
+
+A regressão Ridge é uma regressão que além de levar em conta o erro do treino também leva em conta a medida da magnitude, buscando assim evitar o *overffiting* (uma das características do *overffiting* são altos valores de magnitude) e levar em conta o *trade-off* bias e variância atráves do lambda. Quanto maior o lambda -> bias grande, baixa variância; quando menor o lambda -> bias pequeno, alta variância.
+
+  * se λ = 0, temos a regressão linear "convencional"
+  * se λ = ∞, temos que custo é ∞
+  * se λ > 0 mas λ != ∞, estamos balanceando essas duas ideias: ajustando uma regressão linear em y, e diminuindo os coeficientes estimados
+
+Podemos utilizar a validação cruzada para "tunar" (melhor ajustar os parâmetros) o modelo. E foi exatamente isso que fizemos, segue o resultado abaixo.
+
+## Validação cruzada + Ridge para tunar modelo
+
+``` {r eval=TRUE, echo=TRUE}
+
+# Selecionando k-folder cross validation com 5 repetições e 5 folders
+ctrl <- trainControl(method = "repeatedcv", repeats = 5, number = 5)
+lambda.grid <- expand.grid(lambda = seq(0, 2, by=0.05))
+
+ridge <- train(cra ~ ., data = dados.treino %>% select(-matricula),
+               method='ridge',
+               tuneGrid = lambda.grid, # lambdas testados 
+               trControl = ctrl, # k-folder,
+               metric='RMSE',
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+ridge
+
+plot(ridge, xlab = "Lambda", ylab = "RMSE")
+
+```
+
+Assim, o melhor valor para o lambda entre os valores testados foi ~0.15 levando em conta o RMSE como métrica para definir o "melhor modelo", com erro de ~0.57. O maior R² encontrado foi de ~0.61 que é bastante razoável considerando um modelo puramente linear. Um RMSE de ~0.57 significa que em média estamos errando o CRA de um aluno em ~0.57 para cima ou para baixo o que é um resultado considerado bom levando em conta a simplicidade do modelo.
+  
+### Analisando nos testes
+
+``` {r eval=TRUE, echo=TRUE}
+
+ridge.pred <- predict(ridge, dados.teste %>% select(-matricula) %>% select(-cra))
+ridge.df <- data.frame(pred = ridge.pred, obs = dados.teste$cra)
+ridge.df$model <- "Ridge"
+
+ridge.round <- round(defaultSummary(ridge.df), digits = 3)
+ridge.round
+``` 
+
+O modelo apresentando RMSE mais baixo que no treino (~0.4) e R² mais alto (~0.66). Tal resultado é bastante inesperado e indica que o modelo se sai melhor nos dados de teste que nos dados de treino. E dados os valores prediz relativamente bem o CRA para novos dados.
+
+# 4. Usando todas as variáveis disponíveis (disciplinas do primeiro e segundo período), use validação cruzada (nos dados de treino) para tunar um modelo de regressão Lasso.
+
+Antes de iniciar a análise prática segue uma breve explicação sobre a regressão utilizando Lasso e as diferenças dessa regressão para o método Ridge.
+
+## Lasso
+
+Lasso (least absolute shrinkage and selection operator) é um método de regressão que faz tanto seleção de variáveis como regularização buscando aumentar a acurácia da previsão e tornar o modelo mais facilmente interpretável.
+
+O Lasso utiliza um modo diferente de "penalização" do aumento dos coeficientes, em vez de usar a soma de quadrados como o Ridge ele utiliza a soma dos valores absolutos de valores. De modo que no Ridge os paramêtros podem ser penalizados, mas nunca são zerados de fato, já no Lasso isso pode acontecer, ou seja, uma variável pode ser retirada do modelo.
+
+Porém não há um melhor algoritmo em geral, o ideal é testar as técnicas e utilizar aquela quer gerar um modelo que melhor se adequa aos dados.  
+
+## Validação cruzada + Lasso para tunar modelo
+
+``` {r eval=TRUE, echo=TRUE}
+
+lasso <- train(cra ~ ., data = dados.treino %>% select(-matricula),
+               method='lasso',
+               trControl = ctrl, # k-folder
+               metric='RMSE',
+               tuneLength = 100, # numero de comb. de parametros para serem testadas
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+
+lasso
+plot(lasso, xlab = "Lambda", ylab = "RMSE")
+
+```
+
+Assim, o melhor valor para o lambda dos 100 testados foi ~0.63 levando em conta o RMSE como métrica para definir o "melhor modelo", com erro de ~0.55 e R² de ~0.59 que é razoável considerando um modelo puramente linear. Um resultado levemente melhor que o Ridge, porém ainda sim bastante similar.
+
+### Analisando nos testes
+
+``` {r eval=T, echo=T}
+
+lasso.pred <- predict(lasso, dados.teste %>% select(-matricula) %>% select(-cra))
+
+lasso.df <- data.frame(pred = lasso.pred, obs = dados.teste$cra)
+lasso.df$model <- "Lasso"
+
+lasso.round <- round(defaultSummary(lasso.df), digits = 3)
+lasso.round
+```
+
+Esse modelo também apresenta resultados similares ao Ridge nos dados de teste, apresentando RMSE (~0.41) inferior ao do treino, e levemente superior ao do Ridge e em relação ao R² este também é um pouco mais alto (~0.67) que no treino e também levemente superior ao R² do Ridge. De acordo com os resultados acima podemos dizer que o Ridge se saiu levemente melhor que o Lasso para prever o CRA, porém a diferença é bastante pequena então de certo modo não é errado dizer que ambos tiveram resultados equiparáveis.
+
+# 5. Usando todas as variáveis disponíveis (disciplinas do primeiro e segundo período), use validação cruzada (nos dados de treino) para tunar um modelo de regressão linear sem regularização.
+
+``` {r eval=TRUE, echo=TRUE}
+
+lm <- train(cra ~ ., data = dados.treino %>% select(-matricula),
+               method='lm',
+               trControl = ctrl, # k-folder,
+               metric='RMSE',
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+
+lm
+```
+
+Assim, utilizando apenas a regressão linear obtivesse um RMSE de ~0.56 e R² de ~0.6, resultado esse bastante similar aos resultados do Ridge e Lasso. 
+
+### Analisando nos testes
+
+``` {r eval=T, echo=T}
+
+lm.pred <- predict(lm, dados.teste %>% select(-matricula) %>% select(-cra))
+
+lm.df <- data.frame(pred = lm.pred, obs = dados.teste$cra)
+lm.df$model <- "Linear"
+
+lm.round <- round(defaultSummary(lm.df), digits = 3)
+lm.round
+```
+
+O modelo linear sem regularização se saiu aproximadamente tão bem quanto os modelos analisados anteriormente apresentando RMSE de ~0.4 e R² de ~0.64.
+
+# 6. Re-treine o melhor modelo (dessa vez nos dados de treino sem validação cruzada) e reporte o RMSE no teste.
+
+Tanto o Ridge quanto o Lasso apresentaram resultados similares, então como dito anteriormente não há um modelo vencedor aparente. Assim, utilizarei o método Ridge sem vlidação cruzada para comparar com o Ridge com validação cruzada.
+
+``` {r, echo = T, eval = T}
+
+ridge.no.cv <- train(cra ~ ., data = dados.treino %>% select(-matricula),
+               method='ridge',
+               tuneGrid = lambda.grid,
+               metric='RMSE',
+               preProcess=c('scale', 'center'))
+
+ridge.no.cv
+plot(ridge.no.cv, xlab = "Lambda", ylab = "RMSE")
+```
+
+O menor RMSE encontrado foi com o lambda ~0.15, com um RMSE de ~0.61 e R² de ~0.54, resultados bastante similares ao do Ridge e Lasso utilizando validação cruzada.
+
+### Analisando nos testes
+
+``` {r eval=T, echo=T}
+
+ridge.no.cv.pred <- predict(ridge.no.cv, dados.teste %>% select(-matricula) %>% select(-cra))
+
+ridge.no.cv.df <- data.frame(pred = ridge.no.cv.pred, obs = dados.teste$cra)
+ridge.no.cv.df$model <- "Ridge sem CV"
+
+ridge.no.cv.round <- round(defaultSummary(ridge.no.cv.df), digits = 3)
+ridge.no.cv.round
+```
+
+O ridge sem validação cruzada apresentou R² e RMSE basicamente iguais aos do Ridge com validação cruzada (RMSE levemente maior e R² também um pouco maior), tal resultado mostra que a validação cruzada pode não estar ajudando tanto a escolher um modelo com maior acurácia nas previsões.
+
+# 7. Compare os modelos nos dados de teste em termos de RMSE.
+
+Todos os modelos analisados apresentaram resultados igualmente satisfatórios, os resultados foram tão similares que não faz muito sentido definir um "vencedor".
+
+``` {r, echo = T, eval = T}
+comparacao <- rbind(ridge.df, lasso.df, lm.df, ridge.no.cv.df)
+
+ggplot(comparacao, aes(x = pred, y = obs)) + 
+  geom_point(alpha = 0.5, position = position_jitter(width=0.2)) + 
+  facet_grid(. ~ model) + 
+  geom_abline(color="red") 
+```
+
+### Ridge
+``` {r, echo = T, eval = T}
+ridge.round
+```
+### Lasso
+``` {r, echo = T, eval = T}
+lasso.round
+```
+### Regressão linear sem regularização
+``` {r, echo = T, eval = T}
+lm.round
+```
+### Ridge sem validação cruzada
+``` {r, echo = T, eval = T}
+ridge.no.cv.round
+```
+
+## Conclusão
+
+Resultados tão similares podem significar que provavelmente o uso de regularização não está fazendo uma grande diferença para geração dos modelos, e que o modelo linear convencional não está "dando" *overfitting*. Tal resultado é de certa forma esperado considerando o contexto em que estamos trabalhando em que remover variáveis do modelo (no nosso caso disciplinas) realmente não deve contribuir muito para um melhor modelo.
+ 
+Além disso é válido enfatizar que as variáveis utilizadas são apenas as disciplinas no primeiro e segundo período, e sabemos apenas essas variáveis não são responsáveis pelo desempenho final do aluno, assim não é surpresa que o modelo não apresentar resultados muito significativos. 
+
+# 8. Quais as variáveis mais importantes segundo o modelo de regressão Lasso? Alguma variável foi descartada? Quais?
+
+O modelo lasso define uma importância para uma variável de acordo com "a dificuldade" (maior lâmbda) para "zerar"/desconsiderar tal variável do modelo associando um valor de [0, 100] a essa variável, quanto maior mais importante a variável é para o modelo.
+
+``` {r, echo = T, eval = T} 
+
+varImp(lasso)
+ggplot(varImp(lasso)) + geom_bar(stat="identity", fill="#56B4E9", colour="black")
+
+```
+
+Cálculo 2 é sem dúvida a disciplina menos importante seguida por Cálculo 1 e LPT, as próximas disciplinas têm um nível de importância relativamente próximo, onde se destacam pelo nível de importância P2, Grafos e Discreta que são consideras extremamente importantes para o modelo (~100).
+
+Além disso a única variável retirada do modelo foi Cálculo 2.
+
+# 9. Use o modelo treinado em 6 e aplique nos dados de teste que vamos disponibilizar.
+
+Como dito na sessão anterior todos os modelos apresentam resultados similares então vamos utilizar o Lasso + CV para verificar seus resultados nos dados de teste final.
+
+``` {r, echo = T, eval = T}
+
+treino.final <- read.csv("~/train.csv") %>% na.omit()
+teste.final <- read.csv("~/test.csv")
+
+# consideraremos NAs = 0
+teste.final[is.na(teste.final)] <- 0
+
+colnames(teste.final) <- c("matricula", "Cálculo1", "Vetorial", "LPT", "P1", "IC", "LP1", "Cálculo2", "Discreta", "P2", "Grafos", "Fís.Clássica", "LP2")
+colnames(treino.final) <- c("matricula", "Cálculo1", "Vetorial", "LPT", "P1", "IC", "LP1", "Cálculo2", "Discreta", "P2", "Grafos", "Fís.Clássica", "LP2", "cra")
+
+lasso.final <- train(cra ~ ., data = treino.final %>% select(-matricula),
+               method='lasso',
+               trControl = ctrl, # k-folder
+               metric='RMSE',
+               tuneLength = 100, # numero de comb. de parametros para serem testadas
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+
+lasso.final.pred <- predict(lasso.final, teste.final %>% select(-matricula))
+df.final <- data.frame(matricula = teste.final$matricula, cra = lasso.final.pred)
+write.csv(df.final, "test.csv", row.names = F)
+
+```
+
+O Lasso apresentou um RMSE de 0.46782 nos dados de testes finais (utilizados pelo Kaggle) que é um valor razoável. Tentaremos diminuir esse RMSE na próxima sessão.
+
+# 10. Crie novos atributos a partir dos existentes para tentar melhorar o seu modelo.
+
+Como todos os modelos utilizados nas sessões anteriores apresentaram resultados bastante similares foi escolhido utilizar Lasso + validação cruzada para gerar os novos modelos já que foi mais recomendado pelos monitores e pela literatura. Além disso é possível que novos modelos sejam testados.
+
+## Tentativa 1
+
+Para a tentativa 1 irei utilizar o modelo que consegui um melhor RMSE na parte 2, assim podemos verificar se esse modelo também é bom para a previsão de CRA, além da modelagem apenas.
+
+Esse modelo usa as seguintes variáveis:
+  
+  * Cálculo 1
+  * Vetorial
+  * LPT
+  * LP1
+  * Discreta
+  * Grafos
+  * P2
+
+``` {r, echo = T, eval = T}
+
+df.t1 <- dados.treino %>% select(Cálculo1, Vetorial, LPT, LP1, Discreta, Grafos, P2, matricula, cra) %>%
+  na.omit()
+
+lasso.t1 <- train(cra ~ ., data = df.t1 %>% select(-matricula),
+               method='lasso',
+               trControl = ctrl, # k-folder
+               metric='RMSE',
+               tuneLength = 100, # numero de comb. de parametros para serem testadas
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+
+pred.t1 <- predict(lasso.t1, dados.teste %>% select(-matricula) %>% select(-cra))
+
+df.pred.t1 <- data.frame(pred = pred.t1, obs = dados.teste$cra)
+
+df.pred.t1.round <- round(defaultSummary(df.pred.t1), digits = 3)
+df.pred.t1.round
+
+```
+
+Aparentemente o modelo não se saiu tão bem para prever os dados, então continuaremos tentando com outras estratégias.
+
+## Tentativa 2
+
+Para a tentativa 2 irei utilizar apenas as variáveis mais representativas encontradas pelo modelo lasso. Essas são:
+
+  * Vetorial
+  * IC
+  * Discreta
+  * Grafos
+  * P2
+
+``` {r, echo = T, eval = T}
+
+df.t1 <- dados.treino %>% select(IC, Vetorial, Discreta, Grafos, P2, matricula, cra) %>%
+  na.omit()
+
+lasso.t1 <- train(cra ~ ., data = df.t1 %>% select(-matricula),
+               method='lasso',
+               trControl = ctrl, # k-folder
+               metric='RMSE',
+               tuneLength = 100, # numero de comb. de parametros para serem testadas
+               preProcess=c('scale', 'center') # mais sobre isso em [2]
+               )
+
+pred.t1 <- predict(lasso.t1, dados.teste %>% select(-matricula) %>% select(-cra))
+
+df.pred.t1 <- data.frame(pred = pred.t1, obs = dados.teste$cra)
+
+df.pred.t1.round <- round(defaultSummary(df.pred.t1), digits = 3)
+df.pred.t1.round
+
+t1 <- predict(lasso.t1, teste.final %>% select(-matricula))
+df.final <- data.frame(matricula = teste.final$matricula, cra = t1)
+write.csv(df.final, "test10.csv", row.names = F)
+
+```
+
+Aparentemente o modelo se saiu um pouco melhor para a predição de dados, vamos verificar como se sai nos dados de teste no Kaggle. Infelizmente o modelo obteve um RMSE 0.48054 nos testes, não demonstrando melhora.
+
+## Tentativa 3
+
+Para a tentativa 3 irei utilizar as variáveis mais importantes para o Lasso e adicionar variáveis quadráticas de modo a deixar o modelo mais "complexo" e além disso disciplinas de laboratório foram multiplicadas, assim como P1 e LP1 que são bastante similares (observamos isso na parte 2) e Vetorial e Cálculo 1.
+
+Desse modo foi encontrado o seguite modelo (a partir de alguns testes manuais):
+
+  Discreta² + Grafos² + IC + P2 + LP1 * LP2 + Vetorial * Cálculo1 + P1 * LP1
+
+``` {r, echo = T, eval = T}
+
+lasso.t1 <- train(cra ~ poly(Discreta, 2) + poly(Grafos, 2) + IC + P2 + LP1 * LP2 + Vetorial * Cálculo1 + P1 * LP1, data = dados.treino %>% select(-matricula),
+                 method='lasso',
+                 trControl = ctrl, # k-folder
+                 metric='RMSE',
+                 tuneLength = 100, # numero de comb. de parametros para serem testadas
+                 preProcess=c('scale', 'center') # mais sobre isso em [2]
+                 )
+  
+t1 <- predict(lasso.t1, teste.final %>% select(-matricula))
+df.final <- data.frame(matricula = teste.final$matricula, cra = t1)
+write.csv(df.final, "test10.csv", row.names = F)
+
+```
+
+Esse modelo se saiu melhor que todos os já testados, apresentando RMSE de ~0.44 no Kaggle.
+
+## Tentativa 4
+
+Para a tentativa 4, continuaremos usando o modelo da tentativa 3 e adicionaremos a média de todas as disciplinas como variável.
+
+``` {r, echo = T, eval = T}
+
+dados.treino$media <- rowMeans(dados.treino %>% select(-matricula, -cra))
+dados.teste$media <- rowMeans(dados.teste %>% select(-matricula, -cra))
+
+treino.final$media <- rowMeans(treino.final %>% select(-matricula, -cra))
+teste.final$media <- rowMeans(teste.final %>% select(-matricula))
+
+lasso.t1 <- train(cra ~ poly(Discreta, 2) + poly(Grafos, 2) + IC + P2 + LP1 * LP2 + Vetorial * Cálculo1 + P1 * LP1 + media, data = dados.treino %>% select(-matricula),
+             method='lasso',
+             trControl = ctrl, # k-folder
+             metric='RMSE',
+             tuneLength = 100, # numero de comb. de parametros para serem testadas
+             preProcess=c('scale', 'center') # mais sobre isso em [2]
+             )
+
+t1 <- predict(lasso.t1, dados.teste %>% select(-matricula) %>% select(-cra))
+df.t1 <- data.frame(pred = t1, obs = dados.teste$cra)
+round(defaultSummary(df.t1), digits = 3)
+
+t1 <- predict(lm, teste.final %>% select(-matricula))
+df.final <- data.frame(matricula = teste.final$matricula, cra = t1)
+write.csv(df.final, "test10.csv", row.names = F)
+
+```
+
+Esse foi o melhor modelo encontrado de acordo com os testes no Kaggle, apresentando RMSE de ~0.43.
+
+Melhorias podem ser feitas como mostram os resultados encontrados pelos colegas, porém não consegui melhorar o modelo de forma representativa.
+
+## Referências
+
+[1. cross-validation](https://w...content-available-to-author-only...s.com/cross-validation-for-predictive-analytics-using-r/)
+
+[2. preProcess](http://s...content-available-to-author-only...e.com/questions/29781/when-conducting-multiple-regression-when-should-you-center-your-predictor-varia)
+
+[3. Informações diversas](https://r...content-available-to-author-only...s.com/ryankelly/reg)

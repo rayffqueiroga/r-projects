@@ -1,0 +1,255 @@
+---
+title: "AD2 2016.2 - Lab3 - Parte 1"
+author: "Rayff Queiroga"
+date: "13 de fevereiro de 2016"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, set.seed(825))
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+# Bibliotecas Utlizadas
+
+Primeiramente vamos importar as bibliotecas necessárias para esse script ser executado.
+
+``` {r eval=FALSE, echo=TRUE}
+
+library(dplyr)
+library(reshape2)
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(caret)
+
+```
+
+# Descrição da atividade
+
+## Descrição Geral
+
+Essa tarefa envolve a predição de evasão de aluno(a)s do primeiro período de computação. A pergunta que queremos responder é a seguinte: Após um(a) aluno(a) ter terminado o primeiro período, ele(a) continuará no curso ou não? Vamos usar classificação para responder isso.
+
+## Sobre a Parte 1
+
+Nessa primeira etapa o objetivo é entender os dados e pensar em atributos que podem ajudar na classificação. De forma concreta:
+
+1. Gere uma visualização que mostre em que ano houve mais evasões;
+
+2. Gere uma visualização da distribuição das classes (número de instâncias de cada classe nos dados);
+
+3. Há desbalanceamento das classes (isto é, uma classe tem muito mais instâncias que outra)? Em que proporção? Quais efeitos colaterais o desbalancemanento de classes pode causar no classificador?
+
+4. Crie pelo menos um atributo novo, que não seja a média da disciplina, que você acha que pode ajudar na classificação. Descreva-o e diga por que você acha que pode ser uma boa ideia usá-lo; Compare visualmente a distribuição desse atributo em cada classe (e.g. usando boxplots): elas parecem ser diferentes? 
+
+5. O que ajuda mais o classificador, atributos que tem distribuições de valores diferentes entre as classes ou distribuições parecidas? Por que?
+
+# 0. Obtendo dados de treino e preparando dados para análise
+
+Assim como nas atividades anteriores, temos que modificar o data frame para que só exista uma matrícula em cada coluna e que as médias das disciplinas se tornem colunas. Além disso teremos que lidar com os NAs nos dados, planejo nas próximas fases do lab. testar algumas outras abordagens para retirada de NAs nas médias, porém nessa parte irei apenas transformar os NAs em 0, já que nesse momento a nota nas disciplinas não é o foco principal.
+
+
+``` {r eval=TRUE, echo=TRUE}
+
+treino <- read.csv('~/treino_classificacao.csv')
+
+# NAs -> 0
+treino[is.na(treino)] <- 0 
+
+# Renomeando colunas
+nomes.colunas <- c("matricula", "cod_disciplina", "disciplina", "ano", "periodo", "media", "evadiu")
+colnames(treino) <- nomes.colunas
+
+# Transformacao nos dados
+alunos.evadiu <- treino %>%
+  group_by(matricula) %>% select(matricula, evadiu, ano, periodo) %>% unique()
+
+treino <- treino %>%
+  group_by(matricula, disciplina) %>%
+  ungroup() %>%
+  select(matricula, disciplina, media) %>%
+  mutate(disciplina = as.factor(gsub(" ", ".", disciplina))) %>%
+  dcast(matricula ~ disciplina, mean) %>% merge(alunos.evadiu)
+
+treino[is.na(treino)] <- 0
+
+```
+
+# 1. Gere uma visualização que mostre em que ano houve mais evasões
+
+Irei criar um novo dataframe com as seguintes colunas:
+
+* ano: [2000, 2015]
+* periodo: [1, 2]
+* num_evasoes: número de alunos que entraram no curso naquele certo ano (e período), mas evadiram
+* num_alunos: número de alunos que entraram no curso naquele certo ano (e período)
+* proporcao: num_evasoes / num_alunos
+
+Iremos agrupar os dados tanto por ano quanto por período, já que alunos do 2011.1 e 2011.2, por exemplo, podem e devem ser analisados separadamente. 
+
+``` {r fig.width = 12, fig.height = 10}
+
+num_evasoes <- treino %>% group_by(ano, periodo) %>%
+               summarise(num_evasoes = sum(evadiu),
+                         num_alunos = n(), 
+                         proporcao = num_evasoes / num_alunos)
+
+num_evasoes$ano_periodo <- paste(as.character(num_evasoes$ano), ".", as.character(num_evasoes$periodo), sep="")
+
+ggplot(num_evasoes, aes(reorder(ano_periodo, proporcao), proporcao)) + geom_bar(stat = "identity", position = "dodge", fill="#56B4E9") + geom_text(aes(label=sprintf("%0.2f %%", proporcao * 100)), size = 4) + guides(fill = F) + ylab("Proporção de Evasão") + xlab("Período da matrícula") + coord_flip() 
+
+ggplot(num_evasoes, aes(reorder(ano_periodo, num_evasoes), num_evasoes)) + geom_bar(fill="#FF9999", stat = "identity", position = "dodge") + geom_text(aes(label=num_evasoes), size = 4) + guides(fill = F) + ylab("Número de Evasões") + xlab("Período da matrícula") + coord_flip() 
+```
+
+## Conclusão
+
+O período de 2011.2 apresenta a maior proporção de evasões e também o maior número de evasões. É possível notar também a inexistência de um crescimento ou decrescimento do número de evasões ao longo dos períodos devido à desordenação das *labels* presentes nos gráficos acima.
+
+Os períodos com maior proporção de evasões são:
+
+  * 2011.2
+  * 2005.2
+  * 2012.1
+  * 2014.2
+  * 2009.2
+
+Os períodos com maior número total de evasões são:
+
+  * 2011.2
+  * 2012.1
+  * 2014.2
+  * 2015.1
+  * 2014.1
+
+# 2. Gere uma visualização da distribuição das classes (número de instâncias de cada classe nos dados)
+
+``` {r eval=TRUE, echo=TRUE}
+
+soma_evasoes <- num_evasoes %>% ungroup() %>% summarise(total = sum(num_alunos), evasoes = sum(num_evasoes))
+
+# número total de alunos
+soma_evasoes$total
+
+# número de evasões
+soma_evasoes$evasoes
+
+# número de alunos que não evadiram
+soma_evasoes$total - soma_evasoes$evasoes
+
+# proporção de alunos que evadiram
+(soma_evasoes$evasoes / soma_evasoes$total) * 100
+
+# gráfico
+soma_evasoes.melt <- soma_evasoes %>% melt()
+ggplot(soma_evasoes.melt, aes(x = factor(variable), y = value)) + geom_bar(stat="identity") +  geom_text(aes(label= value), vjust=0) + xlab("") + ylab("Número de alunos")
+
+```
+
+# 3. Há desbalanceamento das classes (isto é, uma classe tem muito mais instâncias que outra)? Em que proporção? Quais efeitos colaterais o desbalancemanento de classes pode causar no classificador?
+
+Sim, existe desbalanceameto das classes, há um número muito maior de não evasões do que de evasões. Uma proporção de ~3.9% evadiram, enquanto ~96.1% não evadiram.
+
+O desbalanceamento pode causar previsões tendenciosas e precisões irreais, com dados de treino desbalanceados o classificador não terá acesso a todas as informações a respeito da classe em minoria para classificar novos dados. 
+
+Em outras palavras: a maioria dos classificadores trabalham melhor quando o número de observação em cada classe é aproximadamente o mesmo. O problema com classes desbalanceadas é que a o grande número de observações de uma classe tende a ignorar os casos das classes que são minoria e as interpretando como um "ruído" e assim prever novas observações como a classe majoritária com mais frequência.
+
+# 4. Crie pelo menos um atributo novo, que não seja a média da disciplina, que você acha que pode ajudar na classificação
+
+Foram escolhidas 3 novas variáveis baseadas nas dicas apresentadas no artigo [2] e pela experiência conseguida com as atividades anteriores. Seguem abaixo as novas variáveis, e mais detalhes sobre as mesmas.
+
+## 4.1. status
+
+Essa variável foi sugerida por [2] como uma boa variável para modelos que utilizam apenas dados do primeiro semestre do curso, é uma variável booleana que tem a seguinte semântica:
+
+  * TRUE : o(a) aluno(a) tem nota < 5 em todas as disciplinas, ou seja, não pagou nenhuma disciplina no primeiro período
+  * FALSE : o(a) aluno(a) tem nota >= 5 em pelo menos uma disciplina, ou seja, pagou pelo menos uma disciplina
+  
+O comportamento esperado é que quando o status seja TRUE o aluno tenda a desistir do curso, já se o status for FALSE não esperamos nada específico do resultado. Segue abaixo uma visualização da distribuição das evasões em relação a essa variável. 
+  
+``` {r eval=TRUE, echo=TRUE}
+
+# Adicionando variavel
+NOTA_MIN = 5
+
+treino$status <- ((treino$Cálculo.Diferencial.e.Integral.I < NOTA_MIN) & (treino$Álgebra.Vetorial.e.Geometria.Analítica < NOTA_MIN) & (treino$Introdução.à.Computação < NOTA_MIN) & (treino$Laboratório.de.Programação.I < NOTA_MIN) & (treino$Leitura.e.Produção.de.Textos < NOTA_MIN) & (treino$Programação.I < NOTA_MIN))
+
+# Preparando dados para plotar em um gráfico de barras
+
+grafico.status <- data.frame(matrix("", ncol = 0, nrow = 1))
+
+grafico.status$T_T <- sum(treino$evadiu == T & treino$status == T)
+grafico.status$T_F <- sum(treino$evadiu == T & treino$status == F)
+grafico.status$F_T <- sum(treino$evadiu == F & treino$status == T)
+grafico.status$F_F <- sum(treino$evadiu == F & treino$status == F)
+
+grafico.status <- grafico.status %>% melt()
+grafico.status$evadiu <- c(T, T, F, F)
+grafico.status$status <- c(T, F, T, F)
+
+# grafico
+grafico.status$labels <-factor(grafico.status$variable,
+                      labels=c("1","2","3","4"))
+ggplot(grafico.status, aes(x=evadiu, value, labels=labels)) +   
+  geom_bar(aes(fill = variable), position = "dodge", stat="identity") + scale_fill_manual(breaks=c("1", "2"), values=c("#56B4E9", "#D01717", "#56B4E9", "#D01717")) + xlab("Evasão") + ylab("Número de alunos")
+```
+
+
+As barras vermelhas indicam o valor FALSE para o status, e as barras azuis o valor TRUE para o status. 
+
+Assim é possível perceber que para a maioria dos alunos que não evadiram o valor do status é FALSE, ou seja, a maioria dos alunos que não evadiram não reprovaram em todas as disciplinas do primeiro período, tal resultado é esperado. Porém a maioria dos alunos que evadiram também apresentam a maioria dos status FALSE. 
+
+Além disso, podemos perceber que a maioria dos alunos que tem status = TRUE, ou seja, reprovaram todas as disciplinas do primeiro período, não evadiram, tal resultado também é esperado devido ao grande desbalanceamento dos dados (sem contar os outliers, que serão mostrados com a análise das variáveis abaixo). Mas ~metade dos alunos que evadiram de fato reprovaram todas as disciplinas, assim é possível que a variável status possa ajudar o classificador a identificar evasões.
+
+## 4.2. cra
+
+De acordo com os labs. anteriores a média/cra das disciplinas se mostra um bom atributo para previsões, portanto acho interessante analisar o seu comportamento em relação a evasão. Segue abaixo a visualização.
+  
+``` {r eval=TRUE, echo=TRUE}
+
+CRED = 4
+
+treino$cra <- (((treino$Cálculo.Diferencial.e.Integral.I * CRED) + (treino$Álgebra.Vetorial.e.Geometria.Analítica * CRED) + (treino$Introdução.à.Computação * CRED) + (treino$Laboratório.de.Programação.I * CRED) + (treino$Leitura.e.Produção.de.Textos * CRED) + (treino$Programação.I * CRED)) / (CRED * 6))
+
+ggplot(treino, aes(x = evadiu, y = cra)) + geom_boxplot() + xlab("Evasão") + ylab("CRA")
+
+```
+
+Podemos notar que a distribuição do CRA dos alunos que não evadiram é mais concentrado entre [6, 8], enquanto os alunos que evadiram os dados são mais dispersos ocupando a faixa de [2, 5]. Ademais é possível notar um grande número de "outliers" que não evadiram do curso, mas que apresentam CRA muito baixo, para a previsão o ideal é a retirada desses valores que podem "sujar" os dados e influenciar negativamente a previsão.
+
+
+## 4.3. cra usando apenas disciplinas do departamento de computação
+
+De acordo com os labs. anteriores também foi possível perceber a maior importância das disciplinas do departamento de computação em detrimento das demais disciplinas de outros departamento, assim eu decidi também utilizar a média/cra das disciplinas do departamento de computação. Segue abaixo a visualização.
+  
+``` {r eval=TRUE, echo=TRUE}
+
+treino$cra_cc <- (((treino$Introdução.à.Computação * CRED) + (treino$Laboratório.de.Programação.I * CRED) + (treino$Programação.I * CRED)) / (CRED * 3))
+
+ggplot(treino, aes(x = evadiu, y = cra_cc)) + geom_boxplot() + xlab("Evasão") + ylab("CRA das disciplinas de CC")
+
+```
+
+Comparando com o uso do CRA (considerando todas as disciplinas) podemos perceber que a distribuição dos alunos que não evadiram continua bastante similar (assim como a existência de outliers), mas a distrição dos alunos que evadiram se torna ainda mais dispersa ocupando a faixa de [0, 6].
+
+# 5. O que ajuda mais o classificador, atributos que tem distribuições de valores diferentes entre as classes ou distribuições parecidas? Por que?
+
+Acredito que atributos que tenham distribuições de valores distintos entre as classes, pois se as distribuições forem similiares em relação a classes distintas esse atributo pouco ajudará o classificador a distinguir as classes. Por exemplo: se utilizarmos a media de uma disciplina X que tanto alunos que evadiram no curso tiraram notas altas quanto alunos que continuaram no curso esse atributo não parece nos ajudar. Porém com distribuições distintas o classificador irá aprender como se comporta essa distribuição e irá utilizá-la para melhor classificar novos dados.
+
+# Referências
+
+[1. practical-guide-deal-imbalanced-classification-problems](https://w...content-available-to-author-only...a.com/blog/2016/03/practical-guide-deal-imbalanced-classification-problems/)
+
+[2. Exploiting Academic Records for Predicting Student Drop Out](https://s...content-available-to-author-only...g.br/index.php/jidm/article/view/1625/2936)
+
+[3. Informações diversas](https://r...content-available-to-author-only...s.com/ryankelly/reg)
